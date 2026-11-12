@@ -169,53 +169,41 @@ impl Render for BreakView {
     }
 }
 
-fn main() {
-    application()
-        .with_quit_mode(gpui_kit::QuitMode::Explicit)
-        .with_assets(assets::Assets)
-        .run(|cx: &mut App| {
-            gpui_component::init(cx);
-            cx.set_global(Schedule::new());
-
-            let _schedule = cx.on_window_closed(|cx, id| {
-                cx.update_global::<Schedule, _>(|s, _| {
-                    if s.break_window
-                        .is_some_and(|handle| handle.window_id() == id)
-                    {
-                        s.break_window = None;
-                    }
-                });
-            });
-
-            let daemon = cx.spawn(async move |cx| {
-                let _schedule = _schedule;
-
-                loop {
-                    let (time_until_break, break_type) =
-                        cx.update(|cx| cx.global_mut::<Schedule>().next_break());
-                    cx.background_executor().timer(time_until_break).await;
-                    let break_started_at = Instant::now();
-                    let window_handle = run_break(cx, break_type, break_started_at);
-                    cx.update_global::<Schedule, _>(|schedule, _| {
-                        schedule.break_window = Some(window_handle);
-                    });
-                    while cx
-                        .update_global::<Schedule, _>(|schedule, _| schedule.break_window.is_some())
-                    {
-                        if Instant::now() >= break_started_at + break_type.duration() {
-                            cx.update_global::<Schedule, _>(|schedule, _| {
-                                schedule.break_window = None
-                            });
-                            _ = window_handle.update(cx, |_, window, _| window.remove_window());
-                        }
-                        cx.background_executor()
-                            .timer(Duration::from_millis(50))
-                            .await;
-                    }
-                }
-            });
-            cx.set_global(Daemon::new(daemon))
+fn run_daemon(cx: &mut App) {
+    let _schedule = cx.on_window_closed(|cx, id| {
+        cx.update_global::<Schedule, _>(|s, _| {
+            if s.break_window
+                .is_some_and(|handle| handle.window_id() == id)
+            {
+                s.break_window = None;
+            }
         });
+    });
+
+    let daemon = cx.spawn(async move |cx| {
+        let _schedule = _schedule;
+
+        loop {
+            let (time_until_break, break_type) =
+                cx.update(|cx| cx.global_mut::<Schedule>().next_break());
+            cx.background_executor().timer(time_until_break).await;
+            let break_started_at = Instant::now();
+            let window_handle = run_break(cx, break_type, break_started_at);
+            cx.update_global::<Schedule, _>(|schedule, _| {
+                schedule.break_window = Some(window_handle);
+            });
+            while cx.update_global::<Schedule, _>(|schedule, _| schedule.break_window.is_some()) {
+                if Instant::now() >= break_started_at + break_type.duration() {
+                    cx.update_global::<Schedule, _>(|schedule, _| schedule.break_window = None);
+                    _ = window_handle.update(cx, |_, window, _| window.remove_window());
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+            }
+        }
+    });
+    cx.set_global(Daemon::new(daemon))
 }
 
 fn run_break(
