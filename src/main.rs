@@ -108,14 +108,24 @@ impl Render for BreakView {
         let seconds = (seconds_remaining.ceil() % 60.).round();
         let time_remaining_text = format!("{minutes:02}:{seconds:02}");
         let progress_bar_value = 1. - seconds_remaining / self.break_type.duration().as_secs_f32();
-        let progress_bar = div().w_full().h_10().bg(rgb(0x0F0F0F)).child(
-            div()
-                .h_full()
-                .w(Length::Definite(gpui_kit::DefiniteLength::Fraction(
-                    progress_bar_value,
-                )))
-                .bg(rgb(0xFFFFFF)),
-        );
+        let progress_bar = div()
+            .w_full()
+            .h_10()
+            .p_1()
+            .border_2()
+            .border_color(rgb(0xEDEDED))
+            .rounded(Pixels::from(9.))
+            .bg(gpui_kit::transparent_black())
+            .overflow_hidden()
+            .child(
+                div()
+                    .rounded(Pixels::from(5.))
+                    .h_full()
+                    .w(Length::Definite(gpui_kit::DefiniteLength::Fraction(
+                        progress_bar_value,
+                    )))
+                    .bg(rgb(0xFFFFFF)),
+            );
         let skip_button = Button::new("skip-button")
             .px_6()
             .py_2()
@@ -126,7 +136,8 @@ impl Render for BreakView {
             .border_color(rgb(0xEDEDED))
             .bg(gpui_kit::transparent_black())
             .rounded_full()
-            .label("Skip");
+            .label("Skip")
+            .on_click(|_, window, _| window.remove_window());
         let center_div = div()
             .flex()
             .flex_col()
