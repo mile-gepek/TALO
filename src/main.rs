@@ -1,58 +1,91 @@
 use std::time::{Duration, Instant};
 
-use gpui_component::{Sizable, StyledExt};
+use clap::{Parser, Subcommand, ValueEnum};
+
+use gpui_component::Sizable;
 use gpui_kit::{
-    App, AsyncApp, Context, Global, Length, SharedString, Task, Window, WindowHandle, WindowId,
-    WindowOptions, application, assets,
-    component::{self, button::Button},
-    div,
-    prelude::*,
-    px, rgb,
+    App, AsyncApp, Context, Global, Length, Pixels, Task, Window, WindowHandle, WindowOptions,
+    application, assets, component::button::Button, div, prelude::*, px, rgb,
 };
+use serde::{Deserialize, Serialize};
+use tokio::sync::watch::{self, Receiver, Sender};
+use tracing_subscriber::EnvFilter;
 
-struct Daemon {
-    _task: Task<()>,
-}
-
-impl Daemon {
-    fn new(task: Task<()>) -> Self {
-        Self { _task: task }
-    }
-}
-impl Global for Daemon {}
-
-struct Schedule {
+struct BreakConfig {
     break_interval: Duration,
     long_break_interval: usize,
-    short_breaks_run: usize,
-    break_window: Option<WindowHandle<BreakView>>,
 }
 
-impl Schedule {
-    pub fn new() -> Self {
-        Self {
-            break_interval: Duration::from_secs(5),
-            long_break_interval: 2,
-            short_breaks_run: 0,
-            break_window: None,
-        }
-    }
-
-    pub fn next_break(&mut self) -> (Duration, BreakType) {
-        let break_type = if self.short_breaks_run >= self.long_break_interval {
-            self.short_breaks_run = 0;
+impl BreakConfig {
+    fn next_break(&self, short_breaks_run: usize) -> (Duration, BreakType) {
+        let break_type = if short_breaks_run >= self.long_break_interval {
             BreakType::Long
         } else {
-            self.short_breaks_run += 1;
             BreakType::Short
         };
         (self.break_interval, break_type)
     }
 }
 
-impl Global for Schedule {}
+struct BreakRunner {
+    window_handle: Option<WindowHandle<BreakView>>,
+}
+impl BreakRunner {
+    fn new() -> Self {
+        Self {
+            window_handle: None,
+        }
+    }
 
-#[derive(Copy, Clone)]
+    fn run_break(&mut self, cx: &mut App, break_type: BreakType) -> Task<()> {
+        if self.window_handle.is_none() {
+            let window_handle = cx
+                .open_window(
+                    WindowOptions {
+                        ..Default::default()
+                    },
+                    |_, cx| cx.new(|cx| BreakView::new(cx, break_type)),
+                )
+                .unwrap();
+
+            self.window_handle = Some(window_handle);
+        }
+
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(break_type.duration()).await;
+            cx.update_global::<BreakRunner, _>(|break_state, cx| {
+                break_state
+                    .window_handle
+                    .take()
+                    .map(|handle| handle.update(cx, |_, window, _| window.remove_window()));
+            });
+        })
+    }
+}
+
+impl Global for BreakRunner {}
+
+struct ActiveState {
+    rx: Receiver<bool>,
+}
+
+impl ActiveState {
+    pub fn new(rx: Receiver<bool>) -> Self {
+        Self { rx }
+    }
+
+    pub fn running(&mut self) -> bool {
+        *self.rx.borrow()
+    }
+
+    pub async fn wait_for_resume(&mut self) {
+        while !*self.rx.borrow_and_update() {
+            _ = self.rx.changed().await;
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, ValueEnum)]
 enum BreakType {
     Long,
     Short,
@@ -78,7 +111,7 @@ struct BreakView {
 }
 
 impl BreakView {
-    pub fn new(cx: &mut Context<Self>, break_type: BreakType, started_at: Instant) -> Self {
+    pub fn new(cx: &mut Context<Self>, break_type: BreakType) -> Self {
         let handle = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -91,7 +124,7 @@ impl BreakView {
             }
         });
         BreakView {
-            started_at,
+            started_at: Instant::now(),
             break_type,
             _ticker: handle,
         }
@@ -135,7 +168,7 @@ impl Render for BreakView {
             .border_2()
             .border_color(rgb(0xEDEDED))
             .bg(gpui_kit::transparent_black())
-            .rounded_full()
+            .rounded(Pixels::from(9.))
             .label("Skip")
             .on_click(|_, window, _| window.remove_window());
         let center_div = div()
@@ -169,53 +202,123 @@ impl Render for BreakView {
     }
 }
 
-fn run_daemon(cx: &mut App) {
-    let _schedule = cx.on_window_closed(|cx, id| {
-        cx.update_global::<Schedule, _>(|s, _| {
-            if s.break_window
-                .is_some_and(|handle| handle.window_id() == id)
-            {
-                s.break_window = None;
-            }
-        });
-    });
-
-    let daemon = cx.spawn(async move |cx| {
-        let _schedule = _schedule;
-
+fn start_break_scheduler(
+    cx: &mut App,
+    config: BreakConfig,
+    mut active_state: ActiveState,
+) -> Task<()> {
+    cx.spawn(async move |cx| {
+        let mut short_breaks_run = 0;
         loop {
-            let (time_until_break, break_type) =
-                cx.update(|cx| cx.global_mut::<Schedule>().next_break());
-            cx.background_executor().timer(time_until_break).await;
-            let break_started_at = Instant::now();
-            let window_handle = run_break(cx, break_type, break_started_at);
-            cx.update_global::<Schedule, _>(|schedule, _| {
-                schedule.break_window = Some(window_handle);
-            });
-            while cx.update_global::<Schedule, _>(|schedule, _| schedule.break_window.is_some()) {
-                if Instant::now() >= break_started_at + break_type.duration() {
-                    cx.update_global::<Schedule, _>(|schedule, _| schedule.break_window = None);
-                    _ = window_handle.update(cx, |_, window, _| window.remove_window());
-                }
-                cx.background_executor()
-                    .timer(Duration::from_millis(50))
-                    .await;
+            if !active_state.running() {
+                tracing::debug!("System paused, waiting until resume");
+                active_state.wait_for_resume().await;
+                tracing::debug!("System resumed, continuing");
             }
+
+            tracing::debug!("Scheduling next break");
+            let (time_until_break, break_type) = config.next_break(short_breaks_run);
+            cx.background_executor().timer(time_until_break).await;
+
+            if !active_state.running() {
+                active_state.wait_for_resume().await;
+                // NOTE: Pausing and unpausing currently resets the break bacuse of `continue`
+                //
+                // If pausing and resuming should just pause the current break,
+                // then the system needs to store the Instant when it was paused,
+                // and add the difference to Instant::now() onto `run_break_at`.
+                // `run_break_at` should be repeatedly checked against Instant::now(),
+                // and run the break *IF* the system is running.
+                // Maybe this can be a toggle in the config?
+                continue;
+            }
+            short_breaks_run = (short_breaks_run + 1) % config.long_break_interval;
+            run_break(cx, break_type).await;
         }
-    });
-    cx.set_global(Daemon::new(daemon))
+    })
 }
 
-fn run_break(
-    cx: &mut AsyncApp,
-    break_type: BreakType,
-    started_at: Instant,
-) -> WindowHandle<BreakView> {
-    cx.open_window(
-        WindowOptions {
-            ..Default::default()
-        },
-        |_, cx| cx.new(|cx| BreakView::new(cx, break_type, started_at)),
-    )
-    .unwrap()
+async fn run_break(cx: &mut AsyncApp, break_type: BreakType) {
+    tracing::debug!("Running break");
+    cx.update_global::<BreakRunner, _>(|runner, cx| runner.run_break(cx, break_type))
+        .await
+}
+
+#[derive(Copy, Clone, Parser, Debug)]
+#[command(version, about)]
+struct Args {
+    /// Maximum level of log messages
+    #[arg(long)]
+    level: Option<tracing::Level>,
+
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+impl Args {
+    fn activate_break_system(&self) -> bool {
+        Self::command_none_or_resume(self.command)
+    }
+
+    fn command_none_or_resume(command: Option<CliCommand>) -> bool {
+        command.is_none_or(|command| matches!(command, CliCommand::Resume))
+    }
+}
+
+#[derive(Copy, Clone, Subcommand, Debug, Serialize, Deserialize)]
+enum CliCommand {
+    Quit,
+    Pause,
+    Resume,
+    /// Run a break manually
+    RunBreak {
+        /// Which break type to run
+        #[arg(value_enum, default_value_t = BreakType::Short)]
+        break_type: BreakType,
+    },
+    Settings,
+}
+
+async fn handle_command(cx: &mut AsyncApp, command: CliCommand, running_tx: Sender<bool>) {
+    match command {
+        CliCommand::Pause => _ = running_tx.send(false),
+        CliCommand::Resume => _ = running_tx.send(true),
+        CliCommand::RunBreak { break_type } => {
+            run_break(cx, break_type).await;
+        }
+        _ => {}
+    }
+}
+
+fn main() {
+    let args = Args::parse();
+
+    let level: tracing::Level = args.level.unwrap_or(tracing::Level::DEBUG);
+    let env_filter = format!("error,{}={}", env!("CARGO_CRATE_NAME"), level);
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new(env_filter))
+        .init();
+
+    let activate_break_system = args.activate_break_system();
+    let (running_tx, running_rx) = watch::channel(activate_break_system);
+    let active_state = ActiveState::new(running_rx);
+
+    application()
+        .with_quit_mode(gpui_kit::QuitMode::Explicit)
+        .with_assets(assets::Assets)
+        .run(move |cx: &mut App| {
+            gpui_component::init(cx);
+            let break_config = BreakConfig {
+                break_interval: Duration::from_secs(5),
+                long_break_interval: 3,
+            };
+            cx.set_global(BreakRunner::new());
+            start_break_scheduler(cx, break_config, active_state).detach();
+            args.command.map(|command| {
+                cx.spawn(async move |cx| {
+                    handle_command(cx, command, running_tx).await;
+                })
+                .detach();
+            });
+        });
 }
