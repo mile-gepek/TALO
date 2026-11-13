@@ -160,9 +160,6 @@ impl Render for BreakView {
                 div()
                     .rounded(Pixels::from(5.))
                     .h_full()
-                    // .w(Length::Definite(gpui_kit::DefiniteLength::Fraction(
-                    //     progress_bar_value,
-                    // )))
                     .bg(rgb(0xFFFFFF))
                     .with_animation(
                         "break-progress-bar",
