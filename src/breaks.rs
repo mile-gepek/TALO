@@ -162,7 +162,7 @@ impl Render for BreakView {
                     .h_full()
                     .bg(rgb(0xFFFFFF))
                     .with_animation(
-                        "break-progress-bar",
+                        "break-progress-bar-animation",
                         progress_bar_animation,
                         |progress_bar, progress_bar_value| {
                             progress_bar.w(Length::Definite(gpui_kit::DefiniteLength::Fraction(
