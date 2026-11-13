@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use clap::{Parser, Subcommand};
 
 use gpui_kit::{App, AsyncApp, application, assets};
