@@ -67,6 +67,13 @@ fn main() {
             let runner = BreakRunner::start(run_on_startup, break_config, cx);
             cx.set_global(runner);
 
+            cx.on_window_closed(|cx, window_id| {
+                cx.update_global::<BreakRunner, _>(|runner, cx| {
+                    runner.on_window_close(cx, window_id)
+                })
+            })
+            .detach();
+
             cx.spawn(async move |cx| spawn_socket_watcher(cx, args.command).await)
                 .detach();
         });

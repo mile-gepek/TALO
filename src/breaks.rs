@@ -39,7 +39,7 @@ struct RunningBreak {
 }
 
 impl RunningBreak {
-    fn close(&self, cx: &mut App) {
+    fn close(&self, cx: &mut AsyncApp) {
         _ = self
             .window_handle
             .update(cx, |_, window, _| window.remove_window());
@@ -111,22 +111,13 @@ impl BreakRunner {
         tracing::debug!("Scheduled {break_type:?} break");
         let break_task = cx.spawn(async move |cx| {
             cx.background_executor().timer(time_until_break).await;
-            cx.update_global::<BreakRunner, _>(|runner, cx| {
-                if runner.run_break(cx, break_type) {
-                    runner.short_breaks_run += 1;
-                    if runner.short_breaks_run > runner.config.long_break_interval {
-                        runner.short_breaks_run = 0;
-                    }
-                };
-            })
+            Self::run_break(cx, break_type);
         });
         self.break_state = Some(BreakKind::Scheduled(break_task));
     }
 
     fn run_break_impl(&mut self, cx: &mut App, break_type: BreakType) {
-        if let Some(BreakKind::Scheduled(..)) = self.break_state {
-            self.break_state = None
-        }
+        let _old_task = self.break_state.take();
 
         tracing::debug!("Running break");
         let window_handle = cx
@@ -143,40 +134,60 @@ impl BreakRunner {
         } else {
             Some(cx.spawn(async move |cx| {
                 cx.background_executor().timer(break_type.duration()).await;
-                cx.update_global::<BreakRunner, _>(|break_state, cx| {
-                    break_state.close_and_schedule(cx);
-                });
+                _ = window_handle.update(cx, |_, window, _| window.remove_window());
             }))
         };
         self.break_state = Some(BreakKind::running(window_handle, break_type, close_task));
     }
 
-    fn run_break_forced(&mut self, cx: &mut App, break_type: BreakType) {
-        self.close_break(cx);
-        self.run_break_impl(cx, break_type);
+    fn run_break_forced(cx: &mut AsyncApp, break_type: BreakType) {
+        let running_break = cx.update_global::<BreakRunner, _>(|runner, cx| {
+            let old = runner.take_running_break();
+            runner.run_break_impl(cx, break_type);
+            old
+        });
+
+        if let Some(running_break) = running_break {
+            running_break.close(cx);
+        }
     }
 
-    fn run_break(&mut self, cx: &mut App, break_type: BreakType) -> bool {
-        if let Some(BreakKind::Running(active_break)) = &self.break_state {
-            if matches!(active_break.break_type, BreakType::Infinite) {
-                active_break.close(cx)
-            } else {
-                return false;
+    fn run_break(cx: &mut AsyncApp, break_type: BreakType) {
+        let running_break = cx.update_global::<BreakRunner, _>(|runner, cx| {
+            let running_break = runner.take_running_break();
+            if let Some(active_break) = &running_break {
+                if !matches!(active_break.break_type, BreakType::Infinite) {
+                    return None;
+                }
+            };
+            runner.run_break_impl(cx, break_type);
+            runner.short_breaks_run += 1;
+            if runner.short_breaks_run > runner.config.long_break_interval {
+                runner.short_breaks_run = 0;
             }
-        }
-        self.run_break_impl(cx, break_type);
-        return true;
-    }
+            running_break
+        });
 
-    fn close_break(&mut self, cx: &mut App) {
-        if let Some(BreakKind::Running(running_break)) = &self.break_state {
-            running_break.close(cx)
+        if let Some(running_break) = running_break {
+            running_break.close(cx);
         }
     }
 
-    fn close_and_schedule(&mut self, cx: &mut App) {
-        self.close_break(cx);
+    fn take_running_break(&mut self) -> Option<RunningBreak> {
+        match self.break_state.take() {
+            Some(BreakKind::Running(running_break)) => Some(running_break),
+            _ => None,
+        }
+    }
 
+    pub fn on_window_close(&mut self, cx: &mut App, window_id: WindowId) {
+        let Some(BreakKind::Running(running_break)) = &self.break_state else {
+            return;
+        };
+        if running_break.window_handle.window_id() != window_id {
+            return;
+        }
+        self.break_state = None;
         if self.running {
             self.schedule_break(cx);
         }
@@ -259,7 +270,7 @@ impl Render for BreakView {
             .bg(gpui_kit::transparent_black())
             .rounded(Pixels::from(9.))
             .label(button_label)
-            .on_click(|_, window, cx| {
+            .on_click(|_, window, _| {
                 window.remove_window();
                 cx.update_global::<BreakRunner, _>(|runner, cx| runner.close_and_schedule(cx))
             });
@@ -332,7 +343,7 @@ impl Render for BreakView {
 }
 
 pub fn run_break_forced(cx: &mut AsyncApp, break_type: BreakType) {
-    cx.update_global::<BreakRunner, _>(|runner, cx| runner.run_break_forced(cx, break_type))
+    BreakRunner::run_break_forced(cx, break_type);
 }
 
 pub fn pause(cx: &mut AsyncApp) {
