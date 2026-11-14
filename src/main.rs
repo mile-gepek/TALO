@@ -1,15 +1,17 @@
 use clap::{Parser, Subcommand};
 
-use gpui_kit::{App, AsyncApp, application, assets};
+use gpui_kit::{App, application, assets};
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch::{self, Sender};
+use tokio::sync::watch::{self};
 use tracing_subscriber::EnvFilter;
 
-use crate::breaks::{
-    ActiveState, BreakConfig, BreakRunner, BreakType, run_break, start_break_scheduler,
+use crate::{
+    breaks::{ActiveState, BreakConfig, BreakRunner, BreakType, start_break_scheduler},
+    ipc::spawn_socket_watcher,
 };
 
 mod breaks;
+mod ipc;
 
 #[derive(Copy, Clone, Parser, Debug)]
 #[command(version, about)]
@@ -33,7 +35,7 @@ impl Args {
 }
 
 #[derive(Copy, Clone, Subcommand, Debug, Serialize, Deserialize)]
-enum CliCommand {
+pub enum CliCommand {
     Quit,
     Pause,
     Resume,
@@ -44,17 +46,6 @@ enum CliCommand {
         break_type: BreakType,
     },
     Settings,
-}
-
-async fn handle_command(cx: &mut AsyncApp, command: CliCommand, running_tx: Sender<bool>) {
-    match command {
-        CliCommand::Pause => _ = running_tx.send(false),
-        CliCommand::Resume => _ = running_tx.send(true),
-        CliCommand::RunBreak { break_type } => {
-            run_break(cx, break_type).await;
-        }
-        _ => {}
-    }
 }
 
 fn main() {
@@ -78,11 +69,8 @@ fn main() {
             let break_config = BreakConfig::new();
             cx.set_global(BreakRunner::new());
             start_break_scheduler(cx, break_config, active_state).detach();
-            args.command.map(|command| {
-                cx.spawn(async move |cx| {
-                    handle_command(cx, command, running_tx).await;
-                })
+
+            cx.spawn(async move |cx| spawn_socket_watcher(cx, args.command, running_tx).await)
                 .detach();
-            });
         });
 }
