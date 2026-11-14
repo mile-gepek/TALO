@@ -335,26 +335,20 @@ impl Render for BreakView {
             let progress_bar_animation = Animation::new(self.break_type.duration());
             let progress_bar = div()
                 .w_full()
-                .h_10()
-                .p_1()
-                .border_2()
-                .border_color(rgb(0xEDEDED))
-                .rounded(Pixels::from(9.))
-                .bg(gpui_kit::transparent_black())
+                .h(rems(0.8))
+                .rounded_full()
+                .bg(rgb(0x888888))
                 .overflow_hidden()
                 .child(
                     div()
-                        .rounded(Pixels::from(5.))
+                        .overflow_hidden()
                         .h_full()
                         .bg(rgb(0xFFFFFF))
+                        .rounded_full()
                         .with_animation(
                             "break-progress-bar-animation",
                             progress_bar_animation,
-                            |progress_bar, progress_bar_value| {
-                                progress_bar.w(Length::Definite(
-                                    gpui_kit::DefiniteLength::Fraction(progress_bar_value),
-                                ))
-                            },
+                            |progress_bar, fraction| progress_bar.w(relative(fraction)),
                         ),
                 );
 
