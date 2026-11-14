@@ -3,7 +3,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gpui_kit::AsyncApp;
 use interprocess::local_socket::{GenericFilePath, ListenerOptions, Name, prelude::*};
 use tokio::sync::mpsc::UnboundedReceiver;
 
