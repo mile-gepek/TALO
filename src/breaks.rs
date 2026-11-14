@@ -272,7 +272,6 @@ impl Render for BreakView {
             .label(button_label)
             .on_click(|_, window, _| {
                 window.remove_window();
-                cx.update_global::<BreakRunner, _>(|runner, cx| runner.close_and_schedule(cx))
             });
 
         let mut center_div = div()
