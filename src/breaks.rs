@@ -97,8 +97,13 @@ impl BreakRunner {
 
     fn resume(&mut self, cx: &mut App) {
         tracing::debug!("Resuming");
+        if self.running {
+            return;
+        }
         self.running = true;
-        self.schedule_break(cx);
+        if self.break_state.is_none() {
+            self.schedule_break(cx);
+        }
     }
 
     fn schedule_break(&mut self, cx: &mut App) {
