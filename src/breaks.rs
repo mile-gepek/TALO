@@ -5,7 +5,7 @@ use clap::ValueEnum;
 use gpui_component::{Sizable, StyledExt};
 use gpui_kit::{
     Animation, AnimationExt, App, AsyncApp, Context, Global, Length, Pixels, Task, Window,
-    WindowHandle, WindowOptions, component::button::Button, div, prelude::*, px, rgb,
+    WindowHandle, WindowId, WindowOptions, component::button::Button, div, prelude::*, px, rgb,
 };
 use serde::{Deserialize, Serialize};
 

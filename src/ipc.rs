@@ -5,11 +5,9 @@ use std::{
 
 use gpui_kit::AsyncApp;
 use interprocess::local_socket::{GenericFilePath, ListenerOptions, Name, prelude::*};
+use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::{
-    CliCommand,
-    breaks::{pause, resume, run_break_forced},
-};
+use crate::CliCommand;
 
 pub static APP_NAME: &str = "talo";
 pub const SOCKET_NAME: &str = concat!("talo-", env!("CARGO_PKG_VERSION"), ".sock");
@@ -56,7 +54,7 @@ fn line_to_command(buffer: String) -> serde_json::Result<CliCommand> {
     serde_json::from_str(&buffer)
 }
 
-fn claim_or_forward(socket_path: PathBuf, command: Option<CliCommand>) -> io::Result<IpcRole> {
+pub fn claim_or_forward(socket_path: PathBuf, command: Option<CliCommand>) -> io::Result<IpcRole> {
     let name = socket_name(socket_path)?;
     match ListenerOptions::new().name(name.clone()).create_sync() {
         Ok(listener) => Ok(IpcRole::Primary(listener)),
@@ -83,40 +81,10 @@ fn claim_or_forward(socket_path: PathBuf, command: Option<CliCommand>) -> io::Re
     }
 }
 
-async fn handle_command(cx: &mut AsyncApp, command: CliCommand) {
-    match command {
-        CliCommand::Pause => _ = pause(cx),
-        CliCommand::Resume => _ = resume(cx),
-        CliCommand::RunBreak { break_type } => {
-            run_break_forced(cx, break_type);
-        }
-        CliCommand::Quit => cx.update(|cx| cx.quit()),
-        CliCommand::Settings => {
-            todo!("Open settings screen");
-        }
-    }
-}
-
-pub async fn spawn_socket_watcher(cx: &mut AsyncApp, command: Option<CliCommand>) {
-    let (ipc_command_tx, mut ipc_command_rx) = tokio::sync::mpsc::unbounded_channel();
-
-    let listener = match claim_or_forward(default_socket_path().unwrap(), command) {
-        Ok(IpcRole::Primary(listener)) => {
-            if let Some(command) = command {
-                handle_command(cx, command).await;
-            }
-            listener
-        }
-        Ok(IpcRole::Secondary) => {
-            cx.update(|cx| cx.quit());
-            return;
-        }
-        Err(err) => {
-            tracing::error!("Error settings up socket: {err}");
-            cx.update(|cx| cx.quit());
-            return;
-        }
-    };
+pub fn spawn_socket_watcher(
+    listener: LocalSocketListener,
+) -> Option<UnboundedReceiver<CliCommand>> {
+    let (ipc_command_tx, ipc_command_rx) = tokio::sync::mpsc::unbounded_channel();
 
     std::thread::spawn(move || {
         let mut buffer = String::with_capacity(128);
@@ -145,8 +113,5 @@ pub async fn spawn_socket_watcher(cx: &mut AsyncApp, command: Option<CliCommand>
         }
     });
 
-    while let Some(ipc_command) = ipc_command_rx.recv().await {
-        tracing::debug!("Got IPC command: {ipc_command:?}");
-        handle_command(cx, ipc_command).await;
-    }
+    Some(ipc_command_rx)
 }
