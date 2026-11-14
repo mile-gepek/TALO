@@ -300,15 +300,16 @@ impl Render for BreakView {
             "Skip break"
         };
         let button = Button::new("skip-button")
-            .px_6()
-            .py_2()
+            .px(px(18.))
+            .py_2p5()
             .text_center()
-            .with_size(px(40.))
+            .with_size(px(0.))
             .text_color(rgb(0xEDEDED))
             .border_2()
             .border_color(rgb(0xEDEDED))
             .bg(gpui_kit::transparent_black())
-            .rounded(Pixels::from(9.))
+            .rounded_full()
+            .ghost()
             .label(button_label)
             .on_click(|_, window, _| {
                 window.remove_window();
@@ -319,11 +320,7 @@ impl Render for BreakView {
             .flex_col()
             .m_auto()
             .gap_12()
-            .w(gpui_kit::Length::Definite(
-                gpui_kit::DefiniteLength::Absolute(gpui_kit::AbsoluteLength::Rems(gpui_kit::Rems(
-                    20.,
-                ))),
-            ))
+            .w(rems(25.))
             .justify_center()
             .items_center()
             .child(break_text);
