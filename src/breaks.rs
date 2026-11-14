@@ -294,7 +294,7 @@ impl Render for BreakView {
         let break_text = self.break_type.text();
         let break_text = div()
             .child(break_text)
-            .text_3xl()
+            .text_size(rems(2.5))
             .font_bold()
             .font_family("Liberation Sans");
         let button_label = if matches!(self.break_type, BreakType::Infinite) {
@@ -313,7 +313,7 @@ impl Render for BreakView {
             .bg(gpui_kit::transparent_black())
             .rounded_full()
             .ghost()
-            .label(button_label)
+            .child(div().text_size(rems(1.1)).child(button_label))
             .on_click(|_, window, _| {
                 window.remove_window();
             });
@@ -323,7 +323,7 @@ impl Render for BreakView {
             .flex_col()
             .m_auto()
             .gap_12()
-            .w(rems(25.))
+            .w(rems(20.))
             .justify_center()
             .items_center()
             .child(break_text);
@@ -334,7 +334,9 @@ impl Render for BreakView {
             let seconds_remaining = time_remaining.as_secs_f32();
             let minutes = (seconds_remaining.ceil() / 60.).round();
             let seconds = (seconds_remaining.ceil() % 60.).round();
-            let time_remaining_text = format!("{minutes:02}:{seconds:02}");
+            let time_remaining_text = div()
+                .text_size(rems(1.2))
+                .child(format!("{minutes:02}:{seconds:02}"));
             let progress_bar_animation = Animation::new(self.break_type.duration());
             let progress_bar = div()
                 .w_full()
@@ -355,7 +357,16 @@ impl Render for BreakView {
                         ),
                 );
 
-            center_div = center_div.child(time_remaining_text).child(progress_bar)
+            let progress_wrapper = div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .child(time_remaining_text)
+                .child(progress_bar);
+
+            center_div = center_div.child(progress_wrapper)
         }
 
         center_div = center_div.child(button);
