@@ -265,8 +265,7 @@ impl BreakType {
 struct BreakView {
     started_at: Instant,
     break_type: BreakType,
-    /// A handle for the break to tick the shown timer and progress bar,
-    /// and eventually exit the break screen
+    /// A task for the break to tick the shown timer and progress bar
     _ticker: Task<()>,
 }
 
