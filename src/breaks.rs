@@ -155,11 +155,10 @@ impl BreakRunner {
     fn run_break(cx: &mut AsyncApp, break_type: BreakType) {
         let running_break = cx.update_global::<BreakRunner, _>(|runner, cx| {
             let running_break = runner.take_running_break();
-            if let Some(active_break) = &running_break {
-                if !matches!(active_break.break_type, BreakType::Infinite) {
+            if let Some(active_break) = &running_break
+                && !matches!(active_break.break_type, BreakType::Infinite) {
                     return None;
-                }
-            };
+                };
             runner.run_break_impl(cx, break_type);
             runner.short_breaks_run += 1;
             if runner.short_breaks_run > runner.config.long_break_interval {

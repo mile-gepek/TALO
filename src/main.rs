@@ -104,7 +104,7 @@ fn main() {
             .detach();
 
             cx.spawn(async move |cx| {
-                args.command.map(|command| command.handle_command(cx));
+                if let Some(command) = args.command { command.handle_command(cx) }
 
                 while let Some(ipc_command) = ipc_command_rx.recv().await {
                     tracing::debug!("Got IPC command: {ipc_command:?}");
