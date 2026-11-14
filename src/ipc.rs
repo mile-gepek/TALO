@@ -96,7 +96,10 @@ pub fn spawn_socket_watcher(
             })
             .map(BufReader::new)
         {
-            conn.read_line(&mut buffer).unwrap();
+            if let Err(err) = conn.read_line(&mut buffer) {
+                tracing::debug!("Error reading line from socket: {err}");
+                continue;
+            };
             drop(conn);
             match line_to_command(buffer.clone()) {
                 Ok(command) => {
