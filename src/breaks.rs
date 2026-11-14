@@ -5,11 +5,11 @@ use std::{
 
 use clap::ValueEnum;
 
-use gpui_component::{Sizable, StyledExt};
+use gpui_component::{Sizable, StyledExt, button::ButtonVariants};
 use gpui_kit::{
-    Animation, AnimationExt, App, AsyncApp, Context, Global, Length, Pixels, Task, TitlebarOptions,
-    Window, WindowHandle, WindowId, WindowOptions, component::button::Button, div,
-    layer_shell::LayerShellOptions, prelude::*, px, rgb,
+    Animation, AnimationExt, App, AsyncApp, Context, Global, Task, TitlebarOptions, Window,
+    WindowHandle, WindowId, WindowOptions, component::button::Button, div,
+    layer_shell::LayerShellOptions, prelude::*, px, relative, rems, rgb,
 };
 use serde::{Deserialize, Serialize};
 
