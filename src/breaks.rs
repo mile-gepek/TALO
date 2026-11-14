@@ -2,13 +2,12 @@ use std::time::{Duration, Instant};
 
 use clap::ValueEnum;
 
-use gpui_component::Sizable;
+use gpui_component::{Sizable, StyledExt};
 use gpui_kit::{
     Animation, AnimationExt, App, AsyncApp, Context, Global, Length, Pixels, Task, Window,
     WindowHandle, WindowOptions, component::button::Button, div, prelude::*, px, rgb,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch::Receiver;
 
 pub struct BreakConfig {
     break_interval: Duration,
@@ -33,71 +32,153 @@ impl BreakConfig {
     }
 }
 
+struct RunningBreak {
+    break_type: BreakType,
+    window_handle: WindowHandle<BreakView>,
+    _window_close_task: Option<Task<()>>,
+}
+
+impl RunningBreak {
+    fn close(&self, cx: &mut App) {
+        _ = self
+            .window_handle
+            .update(cx, |_, window, _| window.remove_window());
+    }
+}
+
+enum BreakKind {
+    Scheduled(Task<()>),
+    Running(RunningBreak),
+}
+
+impl BreakKind {
+    fn running(
+        window_handle: WindowHandle<BreakView>,
+        break_type: BreakType,
+        task: Option<Task<()>>,
+    ) -> Self {
+        Self::Running(RunningBreak {
+            window_handle,
+            break_type,
+            _window_close_task: task,
+        })
+    }
+}
+
 pub struct BreakRunner {
-    window_handle: Option<WindowHandle<BreakView>>,
+    break_state: Option<BreakKind>,
+    config: BreakConfig,
+    short_breaks_run: usize,
+    running: bool,
 }
 
 impl BreakRunner {
-    pub fn new() -> Self {
-        Self {
-            window_handle: None,
+    pub fn start(run_on_startup: bool, config: BreakConfig, cx: &mut App) -> Self {
+        let mut instance = Self {
+            break_state: None,
+            config,
+            short_breaks_run: 0,
+            running: run_on_startup,
+        };
+        if run_on_startup {
+            instance.schedule_break(cx);
         }
+        instance
     }
 
-    fn run_break(&mut self, cx: &mut App, break_type: BreakType) -> Task<()> {
-        if self.window_handle.is_none() {
-            tracing::debug!("Running break");
-            let window_handle = cx
-                .open_window(
-                    WindowOptions {
-                        ..Default::default()
-                    },
-                    |_, cx| cx.new(|cx| BreakView::new(cx, break_type)),
-                )
-                .unwrap();
+    fn pause(&mut self) {
+        tracing::debug!("Pausing");
+        if matches!(self.break_state, Some(BreakKind::Scheduled(..))) {
+            tracing::debug!("Clearing scheduled break");
+            self.break_state = None;
+        }
+        self.running = false;
+    }
 
-            self.window_handle = Some(window_handle);
+    fn resume(&mut self, cx: &mut App) {
+        tracing::debug!("Resuming");
+        self.running = true;
+        self.schedule_break(cx);
+    }
+
+    fn schedule_break(&mut self, cx: &mut App) {
+        let (time_until_break, break_type) = self.config.next_break(self.short_breaks_run);
+        tracing::debug!("Scheduled {break_type:?} break");
+        let break_task = cx.spawn(async move |cx| {
+            cx.background_executor().timer(time_until_break).await;
+            cx.update_global::<BreakRunner, _>(|runner, cx| {
+                if runner.run_break(cx, break_type) {
+                    runner.short_breaks_run += 1;
+                    if runner.short_breaks_run > runner.config.long_break_interval {
+                        runner.short_breaks_run = 0;
+                    }
+                };
+            })
+        });
+        self.break_state = Some(BreakKind::Scheduled(break_task));
+    }
+
+    fn run_break_impl(&mut self, cx: &mut App, break_type: BreakType) {
+        if let Some(BreakKind::Scheduled(..)) = self.break_state {
+            self.break_state = None
         }
 
-        cx.spawn(async move |cx| {
-            cx.background_executor().timer(break_type.duration()).await;
-            cx.update_global::<BreakRunner, _>(|break_state, cx| {
-                break_state
-                    .window_handle
-                    .take()
-                    .map(|handle| handle.update(cx, |_, window, _| window.remove_window()));
-            });
-        })
+        tracing::debug!("Running break");
+        let window_handle = cx
+            .open_window(
+                WindowOptions {
+                    ..Default::default()
+                },
+                |_, cx| cx.new(|cx| BreakView::new(cx, break_type)),
+            )
+            .unwrap();
+
+        let close_task = if matches!(break_type, BreakType::Infinite) {
+            None
+        } else {
+            Some(cx.spawn(async move |cx| {
+                cx.background_executor().timer(break_type.duration()).await;
+                cx.update_global::<BreakRunner, _>(|break_state, cx| {
+                    break_state.close_and_schedule(cx);
+                });
+            }))
+        };
+        self.break_state = Some(BreakKind::running(window_handle, break_type, close_task));
+    }
+
+    fn run_break_forced(&mut self, cx: &mut App, break_type: BreakType) {
+        self.close_break(cx);
+        self.run_break_impl(cx, break_type);
+    }
+
+    fn run_break(&mut self, cx: &mut App, break_type: BreakType) -> bool {
+        if let Some(BreakKind::Running(active_break)) = &self.break_state {
+            if matches!(active_break.break_type, BreakType::Infinite) {
+                active_break.close(cx)
+            } else {
+                return false;
+            }
+        }
+        self.run_break_impl(cx, break_type);
+        return true;
     }
 
     fn close_break(&mut self, cx: &mut App) {
-        self.window_handle
-            .take()
-            .map(|handle| handle.update(cx, |_, window, _| window.remove_window()));
+        if let Some(BreakKind::Running(running_break)) = &self.break_state {
+            running_break.close(cx)
+        }
+    }
+
+    fn close_and_schedule(&mut self, cx: &mut App) {
+        self.close_break(cx);
+
+        if self.running {
+            self.schedule_break(cx);
+        }
     }
 }
 
 impl Global for BreakRunner {}
-
-pub struct ActiveState {
-    rx: Receiver<bool>,
-}
-
-impl ActiveState {
-    pub fn new(rx: Receiver<bool>) -> Self {
-        Self { rx }
-    }
-
-    pub fn running(&mut self) -> bool {
-        *self.rx.borrow()
-    }
-
-    pub async fn wait_for_resume(&mut self) {
-        while !*self.rx.borrow_and_update() {
-            _ = self.rx.changed().await;
-        }
-    }
-}
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, ValueEnum)]
 pub enum BreakType {
@@ -113,6 +194,15 @@ impl BreakType {
             BreakType::Long => Duration::from_secs(15),
             BreakType::Infinite => Duration::MAX,
         }
+    }
+
+    fn text(&self) -> String {
+        match self {
+            BreakType::Short => "Short break",
+            BreakType::Long => "Long break",
+            BreakType::Infinite => "Take a load off.",
+        }
+        .to_string()
     }
 }
 
@@ -146,40 +236,14 @@ impl BreakView {
 
 impl Render for BreakView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let break_text = div().child("Take a load off").text_2xl();
-        let end_at = self.started_at + self.break_type.duration();
-        let time_remaining = end_at.duration_since(Instant::now());
-        let seconds_remaining = time_remaining.as_secs_f32();
-        let minutes = (seconds_remaining.ceil() / 60.).round();
-        let seconds = (seconds_remaining.ceil() % 60.).round();
-        let time_remaining_text = format!("{minutes:02}:{seconds:02}");
-        // let progress_bar_value = 1. - seconds_remaining / self.break_type.duration().as_secs_f32();
-        let progress_bar_animation = Animation::new(self.break_type.duration());
-        let progress_bar = div()
-            .w_full()
-            .h_10()
-            .p_1()
-            .border_2()
-            .border_color(rgb(0xEDEDED))
-            .rounded(Pixels::from(9.))
-            .bg(gpui_kit::transparent_black())
-            .overflow_hidden()
-            .child(
-                div()
-                    .rounded(Pixels::from(5.))
-                    .h_full()
-                    .bg(rgb(0xFFFFFF))
-                    .with_animation(
-                        "break-progress-bar-animation",
-                        progress_bar_animation,
-                        |progress_bar, progress_bar_value| {
-                            progress_bar.w(Length::Definite(gpui_kit::DefiniteLength::Fraction(
-                                progress_bar_value,
-                            )))
-                        },
-                    ),
-            );
-        let skip_button = Button::new("skip-button")
+        let break_text = self.break_type.text();
+        let break_text = div().child(break_text).text_3xl().font_bold();
+        let button_label = if matches!(self.break_type, BreakType::Infinite) {
+            "End break"
+        } else {
+            "Skip break"
+        };
+        let button = Button::new("skip-button")
             .px_6()
             .py_2()
             .text_center()
@@ -189,32 +253,69 @@ impl Render for BreakView {
             .border_color(rgb(0xEDEDED))
             .bg(gpui_kit::transparent_black())
             .rounded(Pixels::from(9.))
-            .label("Skip")
+            .label(button_label)
             .on_click(|_, window, cx| {
                 window.remove_window();
-                cx.update_global::<BreakRunner, _>(|runner, cx| runner.close_break(cx))
+                cx.update_global::<BreakRunner, _>(|runner, cx| runner.close_and_schedule(cx))
             });
-        let center_div = div()
+
+        let mut center_div = div()
             .flex()
             .flex_col()
             .m_auto()
-            .gap_5()
+            .gap_12()
             .w(gpui_kit::Length::Definite(
                 gpui_kit::DefiniteLength::Absolute(gpui_kit::AbsoluteLength::Rems(gpui_kit::Rems(
                     20.,
                 ))),
             ))
-            .h(gpui_kit::Length::Definite(
-                gpui_kit::DefiniteLength::Absolute(gpui_kit::AbsoluteLength::Rems(gpui_kit::Rems(
-                    20.,
-                ))),
-            ))
-            .justify_between()
+            // .h(gpui_kit::Length::Definite(
+            //     gpui_kit::DefiniteLength::Absolute(gpui_kit::AbsoluteLength::Rems(gpui_kit::Rems(
+            //         20.,
+            //     ))),
+            // ))
+            .justify_center()
             .items_center()
-            .child(break_text)
-            .child(time_remaining_text)
-            .child(progress_bar)
-            .child(skip_button);
+            .child(break_text);
+
+        if !matches!(self.break_type, BreakType::Infinite) {
+            let end_at = self.started_at + self.break_type.duration();
+            let time_remaining = end_at.duration_since(Instant::now());
+            let seconds_remaining = time_remaining.as_secs_f32();
+            let minutes = (seconds_remaining.ceil() / 60.).round();
+            let seconds = (seconds_remaining.ceil() % 60.).round();
+            let time_remaining_text = format!("{minutes:02}:{seconds:02}");
+            let progress_bar_animation = Animation::new(self.break_type.duration());
+            let progress_bar = div()
+                .w_full()
+                .h_10()
+                .p_1()
+                .border_2()
+                .border_color(rgb(0xEDEDED))
+                .rounded(Pixels::from(9.))
+                .bg(gpui_kit::transparent_black())
+                .overflow_hidden()
+                .child(
+                    div()
+                        .rounded(Pixels::from(5.))
+                        .h_full()
+                        .bg(rgb(0xFFFFFF))
+                        .with_animation(
+                            "break-progress-bar-animation",
+                            progress_bar_animation,
+                            |progress_bar, progress_bar_value| {
+                                progress_bar.w(Length::Definite(
+                                    gpui_kit::DefiniteLength::Fraction(progress_bar_value),
+                                ))
+                            },
+                        ),
+                );
+
+            center_div = center_div.child(time_remaining_text).child(progress_bar)
+        }
+
+        center_div = center_div.child(button);
+
         div()
             .h_full()
             .w_full()
@@ -225,41 +326,14 @@ impl Render for BreakView {
     }
 }
 
-pub fn start_break_scheduler(
-    cx: &mut App,
-    config: BreakConfig,
-    mut active_state: ActiveState,
-) -> Task<()> {
-    cx.spawn(async move |cx| {
-        let mut short_breaks_run = 0;
-        loop {
-            active_state.wait_for_resume().await;
-
-            tracing::debug!("Scheduling next break");
-            let (time_until_break, break_type) = config.next_break(short_breaks_run);
-            cx.background_executor().timer(time_until_break).await;
-
-            if !active_state.running() {
-                tracing::debug!("System paused, waiting until resume");
-                active_state.wait_for_resume().await;
-                tracing::debug!("System resumed, continuing");
-                // NOTE: Pausing and unpausing currently resets the break bacuse of `continue`
-                //
-                // If pausing and resuming should just pause the current break,
-                // then the system needs to store the Instant when it was paused,
-                // and add the difference to Instant::now() onto `run_break_at`.
-                // `run_break_at` should be repeatedly checked against Instant::now(),
-                // and run the break *IF* the system is running.
-                // Maybe this can be a toggle in the config?
-                continue;
-            }
-            short_breaks_run = (short_breaks_run + 1) % config.long_break_interval;
-            run_break(cx, break_type).await;
-        }
-    })
+pub fn run_break_forced(cx: &mut AsyncApp, break_type: BreakType) {
+    cx.update_global::<BreakRunner, _>(|runner, cx| runner.run_break_forced(cx, break_type))
 }
 
-pub async fn run_break(cx: &mut AsyncApp, break_type: BreakType) {
-    cx.update_global::<BreakRunner, _>(|runner, cx| runner.run_break(cx, break_type))
-        .await
+pub fn pause(cx: &mut AsyncApp) {
+    cx.update_global::<BreakRunner, _>(|runner, _| runner.pause())
+}
+
+pub fn resume(cx: &mut AsyncApp) {
+    cx.update_global::<BreakRunner, _>(|runner, cx| runner.resume(cx))
 }

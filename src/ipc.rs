@@ -5,9 +5,11 @@ use std::{
 
 use gpui_kit::AsyncApp;
 use interprocess::local_socket::{GenericFilePath, ListenerOptions, Name, prelude::*};
-use tokio::sync::watch::Sender;
 
-use crate::{CliCommand, breaks::run_break};
+use crate::{
+    CliCommand,
+    breaks::{pause, resume, run_break_forced},
+};
 
 pub static APP_NAME: &str = "talo";
 pub const SOCKET_NAME: &str = concat!("talo-", env!("CARGO_PKG_VERSION"), ".sock");
@@ -81,12 +83,12 @@ fn claim_or_forward(socket_path: PathBuf, command: Option<CliCommand>) -> io::Re
     }
 }
 
-async fn handle_command(cx: &mut AsyncApp, command: CliCommand, running_tx: &Sender<bool>) {
+async fn handle_command(cx: &mut AsyncApp, command: CliCommand) {
     match command {
-        CliCommand::Pause => _ = running_tx.send(false),
-        CliCommand::Resume => _ = running_tx.send(true),
+        CliCommand::Pause => _ = pause(cx),
+        CliCommand::Resume => _ = resume(cx),
         CliCommand::RunBreak { break_type } => {
-            run_break(cx, break_type).await;
+            run_break_forced(cx, break_type);
         }
         CliCommand::Quit => cx.update(|cx| cx.quit()),
         CliCommand::Settings => {
@@ -95,17 +97,13 @@ async fn handle_command(cx: &mut AsyncApp, command: CliCommand, running_tx: &Sen
     }
 }
 
-pub async fn spawn_socket_watcher(
-    cx: &mut AsyncApp,
-    command: Option<CliCommand>,
-    running_tx: Sender<bool>,
-) {
+pub async fn spawn_socket_watcher(cx: &mut AsyncApp, command: Option<CliCommand>) {
     let (ipc_command_tx, mut ipc_command_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let listener = match claim_or_forward(default_socket_path().unwrap(), command) {
         Ok(IpcRole::Primary(listener)) => {
             if let Some(command) = command {
-                handle_command(cx, command, &running_tx).await;
+                handle_command(cx, command).await;
             }
             listener
         }
@@ -143,6 +141,6 @@ pub async fn spawn_socket_watcher(
 
     while let Some(ipc_command) = ipc_command_rx.recv().await {
         tracing::debug!("Got IPC command: {ipc_command:?}");
-        handle_command(cx, ipc_command, &running_tx).await;
+        handle_command(cx, ipc_command).await;
     }
 }

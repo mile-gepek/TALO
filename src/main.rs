@@ -2,11 +2,10 @@ use clap::{Parser, Subcommand};
 
 use gpui_kit::{App, application, assets};
 use serde::{Deserialize, Serialize};
-use tokio::sync::watch::{self};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    breaks::{ActiveState, BreakConfig, BreakRunner, BreakType, start_break_scheduler},
+    breaks::{BreakConfig, BreakRunner, BreakType},
     ipc::spawn_socket_watcher,
 };
 
@@ -25,7 +24,7 @@ struct Args {
 }
 
 impl Args {
-    fn activate_break_system(&self) -> bool {
+    fn run_on_startup(&self) -> bool {
         Self::command_none_or_resume(self.command)
     }
 
@@ -57,9 +56,7 @@ fn main() {
         .with_env_filter(EnvFilter::new(env_filter))
         .init();
 
-    let activate_break_system = args.activate_break_system();
-    let (running_tx, running_rx) = watch::channel(activate_break_system);
-    let active_state = ActiveState::new(running_rx);
+    let run_on_startup = args.run_on_startup();
 
     application()
         .with_quit_mode(gpui_kit::QuitMode::Explicit)
@@ -67,10 +64,10 @@ fn main() {
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
             let break_config = BreakConfig::new();
-            cx.set_global(BreakRunner::new());
-            start_break_scheduler(cx, break_config, active_state).detach();
+            let runner = BreakRunner::start(run_on_startup, break_config, cx);
+            cx.set_global(runner);
 
-            cx.spawn(async move |cx| spawn_socket_watcher(cx, args.command, running_tx).await)
+            cx.spawn(async move |cx| spawn_socket_watcher(cx, args.command).await)
                 .detach();
         });
 }
