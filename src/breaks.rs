@@ -156,9 +156,10 @@ impl BreakRunner {
         let running_break = cx.update_global::<BreakRunner, _>(|runner, cx| {
             let running_break = runner.take_running_break();
             if let Some(active_break) = &running_break
-                && !matches!(active_break.break_type, BreakType::Infinite) {
-                    return None;
-                };
+                && !matches!(active_break.break_type, BreakType::Infinite)
+            {
+                return None;
+            };
             runner.run_break_impl(cx, break_type);
             runner.short_breaks_run += 1;
             if runner.short_breaks_run > runner.config.long_break_interval {
@@ -283,11 +284,6 @@ impl Render for BreakView {
                     20.,
                 ))),
             ))
-            // .h(gpui_kit::Length::Definite(
-            //     gpui_kit::DefiniteLength::Absolute(gpui_kit::AbsoluteLength::Rems(gpui_kit::Rems(
-            //         20.,
-            //     ))),
-            // ))
             .justify_center()
             .items_center()
             .child(break_text);
