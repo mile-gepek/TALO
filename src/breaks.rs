@@ -7,8 +7,9 @@ use clap::ValueEnum;
 
 use gpui_component::{Sizable, StyledExt};
 use gpui_kit::{
-    Animation, AnimationExt, App, AsyncApp, Context, Global, Length, Pixels, Task, Window,
-    WindowHandle, WindowId, WindowOptions, component::button::Button, div, prelude::*, px, rgb,
+    Animation, AnimationExt, App, AsyncApp, Context, Global, Length, Pixels, Task, TitlebarOptions,
+    Window, WindowHandle, WindowId, WindowOptions, component::button::Button, div,
+    layer_shell::LayerShellOptions, prelude::*, px, rgb,
 };
 use serde::{Deserialize, Serialize};
 
@@ -143,13 +144,27 @@ impl BreakRunner {
         let _old_task = self.break_state.take();
 
         tracing::debug!("Running break");
+        let window_options = WindowOptions {
+            focus: true,
+            titlebar: Some(TitlebarOptions {
+                title: Some("Talo".into()),
+                ..Default::default()
+            }),
+            kind: gpui_kit::WindowKind::LayerShell(LayerShellOptions {
+                exclusive_zone: Some(px(-1.)),
+                anchor: gpui_kit::layer_shell::Anchor::all(),
+                layer: gpui_kit::layer_shell::Layer::Overlay,
+                namespace: "talo_break_screen".to_string(),
+                ..Default::default()
+            }),
+            window_background: gpui_kit::WindowBackgroundAppearance::Blurred,
+            app_id: Some("talo".to_string()),
+            ..Default::default()
+        };
         let window_handle = cx
-            .open_window(
-                WindowOptions {
-                    ..Default::default()
-                },
-                |_, cx| cx.new(|cx| BreakView::new(cx, break_type)),
-            )
+            .open_window(window_options, |_, cx| {
+                cx.new(|cx| BreakView::new(cx, break_type))
+            })
             .unwrap();
 
         let sender_copy = self.tray_sender.clone();
@@ -355,7 +370,7 @@ impl Render for BreakView {
             .h_full()
             .w_full()
             .text_color(rgb(0xEDEDED))
-            .bg(rgb(0x505050))
+            .bg(gpui_kit::transparent_black().alpha(0.8))
             .content_center()
             .child(center_div)
     }
