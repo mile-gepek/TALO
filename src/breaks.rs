@@ -293,7 +293,11 @@ impl BreakView {
 impl Render for BreakView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let break_text = self.break_type.text();
-        let break_text = div().child(break_text).text_3xl().font_bold();
+        let break_text = div()
+            .child(break_text)
+            .text_3xl()
+            .font_bold()
+            .font_family("Liberation Sans");
         let button_label = if matches!(self.break_type, BreakType::Infinite) {
             "End break"
         } else {
