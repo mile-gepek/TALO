@@ -67,6 +67,12 @@ impl BreakRunner {
             });
         })
     }
+
+    fn close_break(&mut self, cx: &mut App) {
+        self.window_handle
+            .take()
+            .map(|handle| handle.update(cx, |_, window, _| window.remove_window()));
+    }
 }
 
 impl Global for BreakRunner {}
@@ -182,7 +188,10 @@ impl Render for BreakView {
             .bg(gpui_kit::transparent_black())
             .rounded(Pixels::from(9.))
             .label("Skip")
-            .on_click(|_, window, _| window.remove_window());
+            .on_click(|_, window, cx| {
+                window.remove_window();
+                cx.update_global::<BreakRunner, _>(|runner, cx| runner.close_break(cx))
+            });
         let center_div = div()
             .flex()
             .flex_col()
