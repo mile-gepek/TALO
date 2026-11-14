@@ -36,6 +36,7 @@ impl BreakConfig {
 pub struct BreakRunner {
     window_handle: Option<WindowHandle<BreakView>>,
 }
+
 impl BreakRunner {
     pub fn new() -> Self {
         Self {
@@ -45,6 +46,7 @@ impl BreakRunner {
 
     fn run_break(&mut self, cx: &mut App, break_type: BreakType) -> Task<()> {
         if self.window_handle.is_none() {
+            tracing::debug!("Running break");
             let window_handle = cx
                 .open_window(
                     WindowOptions {
@@ -258,7 +260,6 @@ pub fn start_break_scheduler(
 }
 
 pub async fn run_break(cx: &mut AsyncApp, break_type: BreakType) {
-    tracing::debug!("Running break");
     cx.update_global::<BreakRunner, _>(|runner, cx| runner.run_break(cx, break_type))
         .await
 }
