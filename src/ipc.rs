@@ -52,8 +52,8 @@ fn command_to_line(command: CliCommand) -> String {
     serde_json::to_string(&command).unwrap()
 }
 
-fn line_to_command(buffer: String) -> CliCommand {
-    serde_json::from_str(&buffer).unwrap()
+fn line_to_command(buffer: String) -> serde_json::Result<CliCommand> {
+    serde_json::from_str(&buffer)
 }
 
 fn claim_or_forward(socket_path: PathBuf, command: Option<CliCommand>) -> io::Result<IpcRole> {
@@ -131,9 +131,15 @@ pub async fn spawn_socket_watcher(cx: &mut AsyncApp, command: Option<CliCommand>
         {
             conn.read_line(&mut buffer).unwrap();
             drop(conn);
-            let command = line_to_command(buffer.clone());
-            if ipc_command_tx.send(command).is_err() {
-                return;
+            match line_to_command(buffer.clone()) {
+                Ok(command) => {
+                    if ipc_command_tx.send(command).is_err() {
+                        return;
+                    };
+                }
+                Err(err) => {
+                    tracing::error!("Got error deserializing IPC data: {err}");
+                }
             };
             buffer.clear();
         }
