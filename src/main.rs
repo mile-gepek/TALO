@@ -7,10 +7,12 @@ use tracing_subscriber::EnvFilter;
 use crate::{
     breaks::{BreakConfig, BreakRunner, BreakType, pause, resume, run_break_forced},
     ipc::{IpcRole, claim_or_forward, default_socket_path, spawn_socket_watcher},
+    tray::{TrayEvent, tray_listener},
 };
 
 mod breaks;
 mod ipc;
+mod tray;
 
 #[derive(Copy, Clone, Parser, Debug)]
 #[command(version, about)]
@@ -80,6 +82,8 @@ fn main() {
         return;
     };
 
+    let (tray_sender, mut tray_receiver) = tray_listener(run_on_startup);
+
     application()
         .with_quit_mode(gpui_kit::QuitMode::Explicit)
         .with_assets(assets::Assets)
@@ -93,7 +97,7 @@ fn main() {
             };
 
             let break_config = BreakConfig::new();
-            let runner = BreakRunner::start(run_on_startup, break_config, cx);
+            let runner = BreakRunner::start(tray_sender, run_on_startup, break_config, cx);
             cx.set_global(runner);
 
             cx.on_window_closed(|cx, window_id| {
@@ -104,11 +108,29 @@ fn main() {
             .detach();
 
             cx.spawn(async move |cx| {
-                if let Some(command) = args.command { command.handle_command(cx) }
+                if let Some(command) = args.command {
+                    command.handle_command(cx)
+                }
 
                 while let Some(ipc_command) = ipc_command_rx.recv().await {
                     tracing::debug!("Got IPC command: {ipc_command:?}");
                     ipc_command.handle_command(cx);
+                }
+            })
+            .detach();
+
+            cx.spawn(async move |cx| {
+                while let Some(tray_event) = tray_receiver.recv().await {
+                    tracing::debug!("Got tray event: {tray_event:?}");
+                    match tray_event {
+                        TrayEvent::Pause => pause(cx),
+                        TrayEvent::Resume => resume(cx),
+                        TrayEvent::Quit => cx.update(|cx| cx.quit()),
+                        TrayEvent::RunBreak(break_type) => run_break_forced(cx, break_type),
+                        TrayEvent::Settings => {
+                            tracing::debug!("Open settings")
+                        }
+                    }
                 }
             })
             .detach();

@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::mpsc::Sender,
+    time::{Duration, Instant},
+};
 
 use clap::ValueEnum;
 
@@ -8,6 +11,8 @@ use gpui_kit::{
     WindowHandle, WindowId, WindowOptions, component::button::Button, div, prelude::*, px, rgb,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::tray::TrayMessage;
 
 pub struct BreakConfig {
     break_interval: Duration,
@@ -66,6 +71,7 @@ impl BreakKind {
 }
 
 pub struct BreakRunner {
+    tray_sender: Sender<TrayMessage>,
     break_state: Option<BreakKind>,
     config: BreakConfig,
     short_breaks_run: usize,
@@ -73,8 +79,14 @@ pub struct BreakRunner {
 }
 
 impl BreakRunner {
-    pub fn start(run_on_startup: bool, config: BreakConfig, cx: &mut App) -> Self {
+    pub fn start(
+        tray_sender: Sender<TrayMessage>,
+        run_on_startup: bool,
+        config: BreakConfig,
+        cx: &mut App,
+    ) -> Self {
         let mut instance = Self {
+            tray_sender,
             break_state: None,
             config,
             short_breaks_run: 0,
@@ -93,6 +105,9 @@ impl BreakRunner {
             self.break_state = None;
         }
         self.running = false;
+        _ = self
+            .tray_sender
+            .send(TrayMessage::ActiveStateChange(self.running));
     }
 
     fn resume(&mut self, cx: &mut App) {
@@ -101,6 +116,9 @@ impl BreakRunner {
             return;
         }
         self.running = true;
+        _ = self
+            .tray_sender
+            .send(TrayMessage::ActiveStateChange(self.running));
         if self.break_state.is_none() {
             self.schedule_break(cx);
         }
@@ -108,12 +126,17 @@ impl BreakRunner {
 
     fn schedule_break(&mut self, cx: &mut App) {
         let (time_until_break, break_type) = self.config.next_break(self.short_breaks_run);
+        let break_runs_at = chrono::Local::now().time() + time_until_break;
         tracing::debug!("Scheduled {break_type:?} break");
         let break_task = cx.spawn(async move |cx| {
             cx.background_executor().timer(time_until_break).await;
             Self::run_break(cx, break_type);
         });
         self.break_state = Some(BreakKind::Scheduled(break_task));
+
+        _ = self
+            .tray_sender
+            .send(TrayMessage::BreakScheduled(break_runs_at, break_type))
     }
 
     fn run_break_impl(&mut self, cx: &mut App, break_type: BreakType) {
@@ -129,12 +152,14 @@ impl BreakRunner {
             )
             .unwrap();
 
+        let sender_copy = self.tray_sender.clone();
         let close_task = if matches!(break_type, BreakType::Infinite) {
             None
         } else {
             Some(cx.spawn(async move |cx| {
                 cx.background_executor().timer(break_type.duration()).await;
                 _ = window_handle.update(cx, |_, window, _| window.remove_window());
+                _ = sender_copy.send(TrayMessage::BreakFinished);
             }))
         };
         self.break_state = Some(BreakKind::running(window_handle, break_type, close_task));
