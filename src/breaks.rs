@@ -159,6 +159,44 @@ impl BreakConfig {
     }
 }
 
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, ValueEnum)]
+pub enum BreakType {
+    Long,
+    Short,
+    Infinite,
+}
+
+impl BreakType {
+    fn duration(&self) -> Duration {
+        match self {
+            BreakType::Short => Duration::from_secs(5),
+            BreakType::Long => Duration::from_secs(15),
+            BreakType::Infinite => Duration::MAX,
+        }
+    }
+
+    fn text(&self) -> String {
+        match self {
+            BreakType::Short => "Short break",
+            BreakType::Long => "Long break",
+            BreakType::Infinite => "Take a load off.",
+        }
+        .to_string()
+    }
+}
+
+#[derive(Copy, Clone)]
+struct ScheduledBreak {
+    run_at: Instant,
+    break_type: BreakType,
+}
+
+impl ScheduledBreak {
+    fn new(run_at: Instant, break_type: BreakType) -> Self {
+        Self { run_at, break_type }
+    }
+}
+
 struct RunningBreak {
     break_type: BreakType,
     window_handle: WindowHandle<BreakView>,
@@ -213,47 +251,13 @@ impl RunningBreak {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, ValueEnum)]
-pub enum BreakType {
-    Long,
-    Short,
-    Infinite,
-}
-
-impl BreakType {
-    fn duration(&self) -> Duration {
-        match self {
-            BreakType::Short => Duration::from_secs(5),
-            BreakType::Long => Duration::from_secs(15),
-            BreakType::Infinite => Duration::MAX,
-        }
-    }
-
-    fn text(&self) -> String {
-        match self {
-            BreakType::Short => "Short break",
-            BreakType::Long => "Long break",
-            BreakType::Infinite => "Take a load off.",
-        }
-        .to_string()
-    }
-}
-
-#[derive(Copy, Clone)]
-struct ScheduledBreak {
-    run_at: Instant,
-    break_type: BreakType,
-}
-
-impl ScheduledBreak {
-    fn new(run_at: Instant, break_type: BreakType) -> Self {
-        Self { run_at, break_type }
-    }
+enum BreakKind {
+    Scheduled(ScheduledBreak),
+    Running(RunningBreak),
 }
 
 pub struct BreakScheduler {
-    scheduled_break: Option<ScheduledBreak>,
-    running_break: Option<RunningBreak>,
+    break_state: Option<BreakKind>,
     short_breaks_run: usize,
     running: bool,
     config: BreakConfig,
@@ -276,8 +280,6 @@ enum Action {
     CloseBreak(RunningBreak),
 }
 
-impl Action {}
-
 impl BreakScheduler {
     pub fn new(
         config: BreakConfig,
@@ -286,8 +288,7 @@ impl BreakScheduler {
     ) -> Self {
         let mut instance = Self {
             short_breaks_run: 0,
-            scheduled_break: None,
-            running_break: None,
+            break_state: None,
             running: run_on_startup,
             config,
             tray_sender,
@@ -313,7 +314,9 @@ impl BreakScheduler {
     fn pause(&mut self) {
         tracing::debug!("Pausing");
         self.running = false;
-        self.scheduled_break = None;
+        if matches!(self.break_state, Some(BreakKind::Scheduled(..))) {
+            self.break_state = None;
+        }
         _ = self.tray_sender.send(TrayMessage::ActiveStateChange(false));
     }
 
@@ -328,9 +331,13 @@ impl BreakScheduler {
     }
 
     fn on_window_close(&mut self, window_id: WindowId) -> Option<Action> {
-        let Some(running_break) = self
-            .running_break
-            .take_if(|running_break| running_break.window_handle.window_id() == window_id)
+        let Some(BreakKind::Running(running_break)) =
+            self.break_state.take_if(|break_state| match break_state {
+                BreakKind::Running(running_break) => {
+                    running_break.window_handle.window_id() == window_id
+                }
+                _ => false,
+            })
         else {
             return None;
         };
@@ -339,9 +346,12 @@ impl BreakScheduler {
     }
 
     pub fn schedule(&mut self) {
+        if matches!(self.break_state, Some(BreakKind::Running(..))) {
+            return;
+        }
         tracing::debug!("Scheduling break");
         let scheduled_break = self.config.next_break(self.short_breaks_run);
-        self.scheduled_break = Some(scheduled_break);
+        self.break_state = Some(BreakKind::Scheduled(scheduled_break));
 
         let time_until_break = scheduled_break.run_at.elapsed();
         let naive_time = chrono::Local::now().time() + time_until_break;
@@ -353,15 +363,8 @@ impl BreakScheduler {
     }
 
     fn open_break(&mut self, cx: &mut AsyncApp, break_type: BreakType) {
-        self.running_break = Some(RunningBreak::open(cx, break_type));
-    }
-
-    fn open_scheduled_break(&mut self, cx: &mut AsyncApp) {
-        let scheduled_break = self
-            .scheduled_break
-            .take()
-            .expect("This is only called in the Some() path");
-        self.open_break(cx, scheduled_break.break_type);
+        let running_break = RunningBreak::open(cx, break_type);
+        self.break_state = Some(BreakKind::Running(running_break));
     }
 }
 
@@ -371,15 +374,15 @@ pub fn start_break_scheduler(
     mut event_reader: UnboundedReceiver<SchedulerEvent>,
 ) -> Task<()> {
     cx.spawn(async move |cx| loop {
-        let event = match &scheduler.scheduled_break {
-            Some(scheduled_break) => tokio::select! {
+        let event = match &scheduler.break_state {
+            Some(BreakKind::Scheduled(scheduled_break)) => tokio::select! {
                 event = event_reader.recv() => event,
                 _ = cx.background_executor().timer(scheduled_break.run_at.saturating_duration_since(Instant::now())) => {
-                    scheduler.open_scheduled_break(cx);
+                    scheduler.open_break(cx, scheduled_break.break_type);
                     continue;
                 }
             },
-            None => event_reader.recv().await,
+            _ => event_reader.recv().await,
         };
         let Some(event) = event else { return };
         if let Some(action) = scheduler.handle(event) {
