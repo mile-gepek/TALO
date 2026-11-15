@@ -88,11 +88,10 @@ fn main() {
 
             let event_sender_clone = event_sender.clone();
             cx.spawn(async move |cx| {
-                if let Some(command) = args.command {
-                    if let Err(err) = command.handle(cx, &event_sender_clone) {
+                if let Some(command) = args.command
+                    && let Err(err) = command.handle(cx, &event_sender_clone) {
                         tracing::debug!("Error handling initial CLI command: {err}")
                     }
-                }
 
                 while let Some(ipc_command) = ipc_command_rx.recv().await {
                     tracing::debug!("Got IPC command: {ipc_command:?}");
