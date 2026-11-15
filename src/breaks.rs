@@ -309,7 +309,9 @@ impl BreakScheduler {
             config,
             tray_sender,
         };
-        instance.schedule();
+        if run_on_startup {
+            instance.schedule();
+        }
         instance
     }
 
