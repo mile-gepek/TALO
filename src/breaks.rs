@@ -198,7 +198,6 @@ impl ScheduledBreak {
 }
 
 struct RunningBreak {
-    break_type: BreakType,
     window_handle: WindowHandle<BreakView>,
     _window_close_task: Option<Task<()>>,
 }
@@ -244,7 +243,6 @@ impl RunningBreak {
             }))
         };
         Self {
-            break_type,
             window_handle,
             _window_close_task: close_task,
         }
