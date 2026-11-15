@@ -1,3 +1,4 @@
+use crate::config::BreakConfig;
 use clap::{Parser, Subcommand};
 
 use gpui_kit::{App, application, assets};
@@ -5,13 +6,15 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    breaks::{BreakConfig, BreakScheduler, BreakType, start_break_scheduler},
+    breaks::{BreakScheduler, BreakType, start_break_scheduler},
     ipc::{IpcRole, claim_or_forward, default_socket_path, spawn_socket_watcher},
     tray::tray_listener,
 };
 
 mod breaks;
+mod config;
 mod ipc;
+mod settings;
 mod tray;
 
 #[derive(Copy, Clone, Parser, Debug)]
@@ -89,9 +92,10 @@ fn main() {
             let event_sender_clone = event_sender.clone();
             cx.spawn(async move |cx| {
                 if let Some(command) = args.command
-                    && let Err(err) = command.handle(cx, &event_sender_clone) {
-                        tracing::debug!("Error handling initial CLI command: {err}")
-                    }
+                    && let Err(err) = command.handle(cx, &event_sender_clone)
+                {
+                    tracing::debug!("Error handling initial CLI command: {err}")
+                }
 
                 while let Some(ipc_command) = ipc_command_rx.recv().await {
                     tracing::debug!("Got IPC command: {ipc_command:?}");

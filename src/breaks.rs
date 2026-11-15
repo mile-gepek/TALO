@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::{Local, NaiveTime};
 use clap::ValueEnum;
 
 use gpui_component::{Sizable, StyledExt, button::ButtonVariants};
@@ -14,7 +15,11 @@ use gpui_kit::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError};
 
-use crate::{CliCommand, tray::TrayMessage};
+use crate::{
+    CliCommand,
+    config::{AfterResumeBehavior, BreakConfig},
+    tray::TrayMessage,
+};
 
 struct BreakView {
     started_at: Instant,
@@ -135,30 +140,6 @@ impl Render for BreakView {
     }
 }
 
-pub struct BreakConfig {
-    break_interval: Duration,
-    long_break_interval: usize,
-}
-
-impl BreakConfig {
-    pub fn new() -> Self {
-        BreakConfig {
-            break_interval: Duration::from_secs(5),
-            long_break_interval: 3,
-        }
-    }
-
-    fn next_break(&self, short_breaks_run: usize) -> ScheduledBreak {
-        let break_type = if short_breaks_run >= self.long_break_interval {
-            BreakType::Long
-        } else {
-            BreakType::Short
-        };
-        let run_at = Instant::now() + self.break_interval;
-        ScheduledBreak::new(run_at, break_type)
-    }
-}
-
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, ValueEnum)]
 pub enum BreakType {
     Long,
@@ -187,13 +168,32 @@ impl BreakType {
 
 #[derive(Copy, Clone)]
 struct ScheduledBreak {
-    run_at: Instant,
+    run_at: NaiveTime,
     break_type: BreakType,
 }
 
 impl ScheduledBreak {
-    fn new(run_at: Instant, break_type: BreakType) -> Self {
+    fn new(run_at: NaiveTime, break_type: BreakType) -> Self {
         Self { run_at, break_type }
+    }
+
+    fn schedule(config: &BreakConfig, short_breaks_run: usize) -> Self {
+        let break_type = if short_breaks_run >= config.long_break_interval {
+            BreakType::Long
+        } else {
+            BreakType::Short
+        };
+        let run_at = Local::now().time() + config.break_interval;
+        ScheduledBreak::new(run_at, break_type)
+    }
+
+    fn schedule_for(config: &BreakConfig, short_breaks_run: usize, deadline: NaiveTime) -> Self {
+        let break_type = if short_breaks_run >= config.long_break_interval {
+            BreakType::Long
+        } else {
+            BreakType::Short
+        };
+        ScheduledBreak::new(deadline, break_type)
     }
 }
 
@@ -272,10 +272,29 @@ impl BreakKind {
     }
 }
 
+enum ActiveState {
+    Paused(NaiveTime),
+    Running,
+}
+
+impl ActiveState {
+    fn new(running: bool) -> Self {
+        if running {
+            Self::Running
+        } else {
+            Self::Paused(Local::now().time())
+        }
+    }
+
+    fn running(&mut self) -> bool {
+        matches!(self, Self::Running)
+    }
+}
+
 pub struct BreakScheduler {
     break_state: Option<BreakKind>,
     short_breaks_run: usize,
-    running: bool,
+    active_state: ActiveState,
     config: BreakConfig,
     tray_sender: Sender<TrayMessage>,
 }
@@ -305,7 +324,7 @@ impl BreakScheduler {
         let mut instance = Self {
             short_breaks_run: 0,
             break_state: None,
-            running: run_on_startup,
+            active_state: ActiveState::new(run_on_startup),
             config,
             tray_sender,
         };
@@ -331,21 +350,40 @@ impl BreakScheduler {
 
     fn pause(&mut self) {
         tracing::debug!("Pausing");
-        self.running = false;
-        if matches!(self.break_state, Some(BreakKind::Scheduled(..))) {
-            self.break_state = None;
-        }
+        self.active_state = ActiveState::Paused(Local::now().time());
         _ = self.tray_sender.send(TrayMessage::ActiveStateChange(false));
     }
 
     fn resume(&mut self) {
-        if self.running {
+        let ActiveState::Paused(paused_at) = self.active_state else {
             return;
-        }
+        };
         tracing::debug!("Resuming");
-        self.running = true;
-        self.schedule();
+        self.active_state = ActiveState::Running;
         _ = self.tray_sender.send(TrayMessage::ActiveStateChange(true));
+        let Some(BreakKind::Scheduled(scheduled_break)) = self.break_state.as_ref() else {
+            self.schedule();
+            return;
+        };
+        let break_type = scheduled_break.break_type;
+        match self.config.after_resume_config.behavior {
+            AfterResumeBehavior::Reschedule => {
+                self.schedule();
+            }
+            AfterResumeBehavior::KeepTimeRemaining => {
+                let after_resume_config = &self.config.after_resume_config;
+                let delay = scheduled_break
+                    .run_at
+                    .signed_duration_since(paused_at)
+                    .max(after_resume_config.min_wait_after_resume);
+                let deadline = Local::now().time() + delay;
+                self.schedule_for(deadline);
+                let run_at_chrono = chrono::Local::now().time() + delay;
+                _ = self
+                    .tray_sender
+                    .send(TrayMessage::BreakScheduled(run_at_chrono, break_type));
+            }
+        }
     }
 
     fn on_window_close(&mut self, window_id: WindowId) -> Option<Action> {
@@ -357,15 +395,35 @@ impl BreakScheduler {
         Some(Action::CloseBreak(running_break))
     }
 
-    pub fn schedule(&mut self) {
+    fn schedule_for(&mut self, deadline: NaiveTime) {
         if matches!(self.break_state, Some(BreakKind::Running(..))) {
             return;
         }
         tracing::debug!("Scheduling break");
-        let scheduled_break = self.config.next_break(self.short_breaks_run);
+        let scheduled_break =
+            ScheduledBreak::schedule_for(&self.config, self.short_breaks_run, deadline);
         self.break_state = Some(BreakKind::Scheduled(scheduled_break));
 
-        let time_until_break = scheduled_break.run_at.elapsed();
+        let now = Local::now().time();
+        let time_until_break = scheduled_break.run_at.signed_duration_since(now);
+        let naive_time = chrono::Local::now().time() + time_until_break;
+
+        _ = self.tray_sender.send(TrayMessage::BreakScheduled(
+            naive_time,
+            scheduled_break.break_type,
+        ));
+    }
+
+    fn schedule(&mut self) {
+        if matches!(self.break_state, Some(BreakKind::Running(..))) {
+            return;
+        }
+        tracing::debug!("Scheduling break");
+        let scheduled_break = ScheduledBreak::schedule(&self.config, self.short_breaks_run);
+        self.break_state = Some(BreakKind::Scheduled(scheduled_break));
+
+        let now = Local::now().time();
+        let time_until_break = scheduled_break.run_at.signed_duration_since(now);
         let naive_time = chrono::Local::now().time() + time_until_break;
 
         _ = self.tray_sender.send(TrayMessage::BreakScheduled(
@@ -379,8 +437,10 @@ impl BreakScheduler {
         self.break_state = Some(BreakKind::Running(running_break));
     }
 
-    fn scheduled_break_timer_finished(&mut self, cx: &mut AsyncApp) {
-        let Some(BreakKind::Scheduled(scheduled_break)) = self.break_state else {
+    fn on_scheduled_break_timer_finished(&mut self, cx: &mut AsyncApp) {
+        let Some(BreakKind::Scheduled(scheduled_break)) =
+            self.break_state.take_if(|_| self.active_state.running())
+        else {
             return;
         };
         self.open_break(cx, scheduled_break.break_type);
@@ -392,22 +452,35 @@ pub fn start_break_scheduler(
     cx: &mut App,
     mut event_reader: UnboundedReceiver<SchedulerEvent>,
 ) -> Task<()> {
-    cx.spawn(async move |cx| loop {
-        let event = match &scheduler.break_state {
-            Some(BreakKind::Scheduled(scheduled_break)) => tokio::select! {
-                event = event_reader.recv() => event,
-                _ = cx.background_executor().timer(scheduled_break.run_at.saturating_duration_since(Instant::now())) => {
-                    scheduler.scheduled_break_timer_finished(cx);
-                    continue;
+    cx.spawn(async move |cx| {
+        loop {
+            let event = match &scheduler.break_state {
+                Some(BreakKind::Scheduled(scheduled_break)) => {
+                    let now = Local::now().time();
+                    let time_sleep = scheduled_break
+                        .run_at
+                        .signed_duration_since(now)
+                        .to_std()
+                        .expect("run_at should be later than now");
+                    tokio::select! {
+                        event = event_reader.recv() => event,
+                        _ = {
+                            cx.background_executor().timer(time_sleep)
+                        },
+                        if scheduler.active_state.running() => {
+                            scheduler.on_scheduled_break_timer_finished(cx);
+                            continue;
+                        }
+                    }
                 }
-            },
-            _ => event_reader.recv().await,
-        };
-        let Some(event) = event else { return };
-        if let Some(action) = scheduler.handle(event) {
-            match action {
-                Action::CloseBreak(running_break) => running_break.close(cx),
-                Action::OpenBreak(break_type) => scheduler.open_break(cx, break_type),
+                _ => event_reader.recv().await,
+            };
+            let Some(event) = event else { return };
+            if let Some(action) = scheduler.handle(event) {
+                match action {
+                    Action::CloseBreak(running_break) => running_break.close(cx),
+                    Action::OpenBreak(break_type) => scheduler.open_break(cx, break_type),
+                }
             }
         }
     })
