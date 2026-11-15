@@ -1,13 +1,13 @@
 use clap::{Parser, Subcommand};
 
-use gpui_kit::{App, AsyncApp, BorrowAppContext, application, assets};
+use gpui_kit::{App, application, assets};
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    breaks::{BreakConfig, BreakRunner, BreakType, pause, resume, run_break_forced},
+    breaks::{BreakConfig, BreakScheduler, BreakType, start_break_scheduler},
     ipc::{IpcRole, claim_or_forward, default_socket_path, spawn_socket_watcher},
-    tray::{TrayEvent, tray_listener},
+    tray::tray_listener,
 };
 
 mod breaks;
@@ -49,22 +49,6 @@ pub enum CliCommand {
     Settings,
 }
 
-impl CliCommand {
-    pub fn handle_command(self, cx: &mut AsyncApp) {
-        match self {
-            Self::Pause => pause(cx),
-            Self::Resume => resume(cx),
-            Self::RunBreak { break_type } => {
-                run_break_forced(cx, break_type);
-            }
-            Self::Quit => cx.update(|cx| cx.quit()),
-            Self::Settings => {
-                todo!("Open settings screen");
-            }
-        }
-    }
-}
-
 fn main() {
     let args = Args::parse();
 
@@ -96,40 +80,40 @@ fn main() {
                 return;
             };
 
+            let (event_sender, event_reader) = tokio::sync::mpsc::unbounded_channel();
+
             let break_config = BreakConfig::new();
-            let runner = BreakRunner::start(tray_sender, run_on_startup, break_config, cx);
-            cx.set_global(runner);
+            let runner = BreakScheduler::new(break_config, run_on_startup, tray_sender);
+            start_break_scheduler(runner, cx, event_reader).detach();
 
-            cx.on_window_closed(|cx, window_id| {
-                cx.update_global::<BreakRunner, _>(|runner, cx| {
-                    runner.on_window_close(cx, window_id)
-                })
-            })
-            .detach();
-
+            let event_sender_clone = event_sender.clone();
             cx.spawn(async move |cx| {
                 if let Some(command) = args.command {
-                    command.handle_command(cx)
+                    if let Err(err) = command.handle(cx, &event_sender_clone) {
+                        tracing::debug!("Error handling initial CLI command: {err}")
+                    }
                 }
 
                 while let Some(ipc_command) = ipc_command_rx.recv().await {
                     tracing::debug!("Got IPC command: {ipc_command:?}");
-                    ipc_command.handle_command(cx);
+                    if let Err(err) = ipc_command.handle(cx, &event_sender_clone) {
+                        tracing::debug!("Error handling IPC command: {err}")
+                    }
                 }
             })
             .detach();
 
+            let event_sender_clone = event_sender.clone();
+            cx.on_window_closed(move |_, window_id| {
+                _ = event_sender_clone.send(breaks::SchedulerEvent::WindowClosed(window_id));
+            })
+            .detach();
+
             cx.spawn(async move |cx| {
-                while let Some(tray_event) = tray_receiver.recv().await {
-                    tracing::debug!("Got tray event: {tray_event:?}");
-                    match tray_event {
-                        TrayEvent::Pause => pause(cx),
-                        TrayEvent::Resume => resume(cx),
-                        TrayEvent::Quit => cx.update(|cx| cx.quit()),
-                        TrayEvent::RunBreak(break_type) => run_break_forced(cx, break_type),
-                        TrayEvent::Settings => {
-                            tracing::debug!("Open settings")
-                        }
+                while let Some(tray_command) = tray_receiver.recv().await {
+                    tracing::debug!("Got tray command: {tray_command:?}");
+                    if let Err(err) = tray_command.handle(cx, &event_sender) {
+                        tracing::debug!("Error handling tray command: {err}")
                     }
                 }
             })

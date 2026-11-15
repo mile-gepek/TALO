@@ -12,255 +12,9 @@ use gpui_kit::{
     layer_shell::LayerShellOptions, prelude::*, px, relative, rems, rgb,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError};
 
-use crate::tray::TrayMessage;
-
-pub struct BreakConfig {
-    break_interval: Duration,
-    long_break_interval: usize,
-}
-
-impl BreakConfig {
-    pub fn new() -> Self {
-        BreakConfig {
-            break_interval: Duration::from_secs(5),
-            long_break_interval: 3,
-        }
-    }
-
-    fn next_break(&self, short_breaks_run: usize) -> (Duration, BreakType) {
-        let break_type = if short_breaks_run >= self.long_break_interval {
-            BreakType::Long
-        } else {
-            BreakType::Short
-        };
-        (self.break_interval, break_type)
-    }
-}
-
-struct RunningBreak {
-    break_type: BreakType,
-    window_handle: WindowHandle<BreakView>,
-    _window_close_task: Option<Task<()>>,
-}
-
-impl RunningBreak {
-    fn close(&self, cx: &mut AsyncApp) {
-        _ = self
-            .window_handle
-            .update(cx, |_, window, _| window.remove_window());
-    }
-}
-
-enum BreakKind {
-    Scheduled(Task<()>),
-    Running(RunningBreak),
-}
-
-impl BreakKind {
-    fn running(
-        window_handle: WindowHandle<BreakView>,
-        break_type: BreakType,
-        task: Option<Task<()>>,
-    ) -> Self {
-        Self::Running(RunningBreak {
-            window_handle,
-            break_type,
-            _window_close_task: task,
-        })
-    }
-}
-
-pub struct BreakRunner {
-    tray_sender: Sender<TrayMessage>,
-    break_state: Option<BreakKind>,
-    config: BreakConfig,
-    short_breaks_run: usize,
-    running: bool,
-}
-
-impl BreakRunner {
-    pub fn start(
-        tray_sender: Sender<TrayMessage>,
-        run_on_startup: bool,
-        config: BreakConfig,
-        cx: &mut App,
-    ) -> Self {
-        let mut instance = Self {
-            tray_sender,
-            break_state: None,
-            config,
-            short_breaks_run: 0,
-            running: run_on_startup,
-        };
-        if run_on_startup {
-            instance.schedule_break(cx);
-        }
-        instance
-    }
-
-    fn pause(&mut self) {
-        tracing::debug!("Pausing");
-        if matches!(self.break_state, Some(BreakKind::Scheduled(..))) {
-            tracing::debug!("Clearing scheduled break");
-            self.break_state = None;
-        }
-        self.running = false;
-        _ = self
-            .tray_sender
-            .send(TrayMessage::ActiveStateChange(self.running));
-    }
-
-    fn resume(&mut self, cx: &mut App) {
-        tracing::debug!("Resuming");
-        if self.running {
-            return;
-        }
-        self.running = true;
-        _ = self
-            .tray_sender
-            .send(TrayMessage::ActiveStateChange(self.running));
-        if self.break_state.is_none() {
-            self.schedule_break(cx);
-        }
-    }
-
-    fn schedule_break(&mut self, cx: &mut App) {
-        let (time_until_break, break_type) = self.config.next_break(self.short_breaks_run);
-        let break_runs_at = chrono::Local::now().time() + time_until_break;
-        tracing::debug!("Scheduled {break_type:?} break");
-        let break_task = cx.spawn(async move |cx| {
-            cx.background_executor().timer(time_until_break).await;
-            Self::run_break(cx, break_type);
-        });
-        self.break_state = Some(BreakKind::Scheduled(break_task));
-
-        _ = self
-            .tray_sender
-            .send(TrayMessage::BreakScheduled(break_runs_at, break_type))
-    }
-
-    fn run_break_impl(&mut self, cx: &mut App, break_type: BreakType) {
-        let _old_task = self.break_state.take();
-
-        tracing::debug!("Running break");
-        let window_options = WindowOptions {
-            focus: true,
-            titlebar: Some(TitlebarOptions {
-                title: Some("Talo".into()),
-                ..Default::default()
-            }),
-            kind: gpui_kit::WindowKind::LayerShell(LayerShellOptions {
-                exclusive_zone: Some(px(-1.)),
-                anchor: gpui_kit::layer_shell::Anchor::all(),
-                layer: gpui_kit::layer_shell::Layer::Overlay,
-                namespace: "talo_break_screen".to_string(),
-                ..Default::default()
-            }),
-            window_background: gpui_kit::WindowBackgroundAppearance::Blurred,
-            app_id: Some("talo".to_string()),
-            ..Default::default()
-        };
-        let window_handle = cx
-            .open_window(window_options, |_, cx| {
-                cx.new(|cx| BreakView::new(cx, break_type))
-            })
-            .unwrap();
-
-        let sender_copy = self.tray_sender.clone();
-        let close_task = if matches!(break_type, BreakType::Infinite) {
-            None
-        } else {
-            Some(cx.spawn(async move |cx| {
-                cx.background_executor().timer(break_type.duration()).await;
-                _ = window_handle.update(cx, |_, window, _| window.remove_window());
-                _ = sender_copy.send(TrayMessage::BreakFinished);
-            }))
-        };
-        self.break_state = Some(BreakKind::running(window_handle, break_type, close_task));
-    }
-
-    fn run_break_forced(cx: &mut AsyncApp, break_type: BreakType) {
-        let running_break = cx.update_global::<BreakRunner, _>(|runner, cx| {
-            let old = runner.take_running_break();
-            runner.run_break_impl(cx, break_type);
-            old
-        });
-
-        if let Some(running_break) = running_break {
-            running_break.close(cx);
-        }
-    }
-
-    fn run_break(cx: &mut AsyncApp, break_type: BreakType) {
-        let running_break = cx.update_global::<BreakRunner, _>(|runner, cx| {
-            let running_break = runner.take_running_break();
-            if let Some(active_break) = &running_break
-                && !matches!(active_break.break_type, BreakType::Infinite)
-            {
-                return None;
-            };
-            runner.run_break_impl(cx, break_type);
-            runner.short_breaks_run += 1;
-            if runner.short_breaks_run > runner.config.long_break_interval {
-                runner.short_breaks_run = 0;
-            }
-            running_break
-        });
-
-        if let Some(running_break) = running_break {
-            running_break.close(cx);
-        }
-    }
-
-    fn take_running_break(&mut self) -> Option<RunningBreak> {
-        match self.break_state.take() {
-            Some(BreakKind::Running(running_break)) => Some(running_break),
-            _ => None,
-        }
-    }
-
-    pub fn on_window_close(&mut self, cx: &mut App, window_id: WindowId) {
-        let Some(BreakKind::Running(running_break)) = &self.break_state else {
-            return;
-        };
-        if running_break.window_handle.window_id() != window_id {
-            return;
-        }
-        self.break_state = None;
-        if self.running {
-            self.schedule_break(cx);
-        }
-    }
-}
-
-impl Global for BreakRunner {}
-
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, ValueEnum)]
-pub enum BreakType {
-    Long,
-    Short,
-    Infinite,
-}
-
-impl BreakType {
-    fn duration(&self) -> Duration {
-        match self {
-            BreakType::Short => Duration::from_secs(5),
-            BreakType::Long => Duration::from_secs(15),
-            BreakType::Infinite => Duration::MAX,
-        }
-    }
-
-    fn text(&self) -> String {
-        match self {
-            BreakType::Short => "Short break",
-            BreakType::Long => "Long break",
-            BreakType::Infinite => "Take a load off.",
-        }
-        .to_string()
-    }
-}
+use crate::{CliCommand, tray::TrayMessage};
 
 struct BreakView {
     started_at: Instant,
@@ -381,14 +135,280 @@ impl Render for BreakView {
     }
 }
 
-pub fn run_break_forced(cx: &mut AsyncApp, break_type: BreakType) {
-    BreakRunner::run_break_forced(cx, break_type);
+pub struct BreakConfig {
+    break_interval: Duration,
+    long_break_interval: usize,
 }
 
-pub fn pause(cx: &mut AsyncApp) {
-    cx.update_global::<BreakRunner, _>(|runner, _| runner.pause())
+impl BreakConfig {
+    pub fn new() -> Self {
+        BreakConfig {
+            break_interval: Duration::from_secs(5),
+            long_break_interval: 3,
+        }
+    }
+
+    fn next_break(&self, short_breaks_run: usize) -> ScheduledBreak {
+        let break_type = if short_breaks_run >= self.long_break_interval {
+            BreakType::Long
+        } else {
+            BreakType::Short
+        };
+        let run_at = Instant::now() + self.break_interval;
+        ScheduledBreak::new(run_at, break_type)
+    }
 }
 
-pub fn resume(cx: &mut AsyncApp) {
-    cx.update_global::<BreakRunner, _>(|runner, cx| runner.resume(cx))
+struct RunningBreak {
+    break_type: BreakType,
+    window_handle: WindowHandle<BreakView>,
+    _window_close_task: Option<Task<()>>,
+}
+
+impl RunningBreak {
+    fn close(&self, cx: &mut AsyncApp) {
+        _ = self
+            .window_handle
+            .update(cx, |_, window, _| window.remove_window());
+    }
+
+    fn open(cx: &mut AsyncApp, break_type: BreakType) -> RunningBreak {
+        tracing::debug!("Running break");
+        let window_options = WindowOptions {
+            focus: true,
+            titlebar: Some(TitlebarOptions {
+                title: Some("Talo".into()),
+                ..Default::default()
+            }),
+            kind: gpui_kit::WindowKind::LayerShell(LayerShellOptions {
+                exclusive_zone: Some(px(-1.)),
+                anchor: gpui_kit::layer_shell::Anchor::all(),
+                layer: gpui_kit::layer_shell::Layer::Overlay,
+                namespace: "talo_break_screen".to_string(),
+                ..Default::default()
+            }),
+            window_background: gpui_kit::WindowBackgroundAppearance::Blurred,
+            app_id: Some("talo".to_string()),
+            ..Default::default()
+        };
+        let window_handle = cx
+            .open_window(window_options, |_, cx| {
+                cx.new(|cx| BreakView::new(cx, break_type))
+            })
+            .unwrap();
+
+        let close_task = if matches!(break_type, BreakType::Infinite) {
+            None
+        } else {
+            Some(cx.spawn(async move |cx| {
+                cx.background_executor().timer(break_type.duration()).await;
+                _ = window_handle.update(cx, |_, window, _| window.remove_window());
+            }))
+        };
+        Self {
+            break_type,
+            window_handle,
+            _window_close_task: close_task,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, ValueEnum)]
+pub enum BreakType {
+    Long,
+    Short,
+    Infinite,
+}
+
+impl BreakType {
+    fn duration(&self) -> Duration {
+        match self {
+            BreakType::Short => Duration::from_secs(5),
+            BreakType::Long => Duration::from_secs(15),
+            BreakType::Infinite => Duration::MAX,
+        }
+    }
+
+    fn text(&self) -> String {
+        match self {
+            BreakType::Short => "Short break",
+            BreakType::Long => "Long break",
+            BreakType::Infinite => "Take a load off.",
+        }
+        .to_string()
+    }
+}
+
+#[derive(Copy, Clone)]
+struct ScheduledBreak {
+    run_at: Instant,
+    break_type: BreakType,
+}
+
+impl ScheduledBreak {
+    fn new(run_at: Instant, break_type: BreakType) -> Self {
+        Self { run_at, break_type }
+    }
+}
+
+pub struct BreakScheduler {
+    scheduled_break: Option<ScheduledBreak>,
+    running_break: Option<RunningBreak>,
+    short_breaks_run: usize,
+    running: bool,
+    config: BreakConfig,
+    tray_sender: Sender<TrayMessage>,
+}
+
+impl Global for BreakScheduler {}
+
+#[derive(Debug)]
+pub enum SchedulerEvent {
+    RunBreakForced(BreakType),
+    Pause,
+    Resume,
+    WindowClosed(WindowId),
+}
+
+/// Side-effects of the break system.
+enum Action {
+    OpenBreak(BreakType),
+    CloseBreak(RunningBreak),
+}
+
+impl Action {}
+
+impl BreakScheduler {
+    pub fn new(
+        config: BreakConfig,
+        run_on_startup: bool,
+        tray_sender: Sender<TrayMessage>,
+    ) -> Self {
+        let mut instance = Self {
+            short_breaks_run: 0,
+            scheduled_break: None,
+            running_break: None,
+            running: run_on_startup,
+            config,
+            tray_sender,
+        };
+        instance.schedule();
+        instance
+    }
+
+    fn handle(&mut self, event: SchedulerEvent) -> Option<Action> {
+        match event {
+            SchedulerEvent::Pause => self.pause(),
+            SchedulerEvent::Resume => self.resume(),
+            SchedulerEvent::WindowClosed(window_id) => {
+                return self.on_window_close(window_id);
+            }
+            SchedulerEvent::RunBreakForced(break_type) => {
+                return Some(Action::OpenBreak(break_type));
+            }
+        }
+        None
+    }
+
+    fn pause(&mut self) {
+        tracing::debug!("Pausing");
+        self.running = false;
+        self.scheduled_break = None;
+        _ = self.tray_sender.send(TrayMessage::ActiveStateChange(false));
+    }
+
+    fn resume(&mut self) {
+        if self.running {
+            return;
+        }
+        tracing::debug!("Resuming");
+        self.running = true;
+        self.schedule();
+        _ = self.tray_sender.send(TrayMessage::ActiveStateChange(true));
+    }
+
+    fn on_window_close(&mut self, window_id: WindowId) -> Option<Action> {
+        let Some(running_break) = self
+            .running_break
+            .take_if(|running_break| running_break.window_handle.window_id() == window_id)
+        else {
+            return None;
+        };
+        _ = self.tray_sender.send(TrayMessage::BreakFinished);
+        Some(Action::CloseBreak(running_break))
+    }
+
+    pub fn schedule(&mut self) {
+        tracing::debug!("Scheduling break");
+        let scheduled_break = self.config.next_break(self.short_breaks_run);
+        self.scheduled_break = Some(scheduled_break);
+
+        let time_until_break = scheduled_break.run_at.elapsed();
+        let naive_time = chrono::Local::now().time() + time_until_break;
+
+        _ = self.tray_sender.send(TrayMessage::BreakScheduled(
+            naive_time,
+            scheduled_break.break_type,
+        ));
+    }
+
+    fn open_break(&mut self, cx: &mut AsyncApp, break_type: BreakType) {
+        self.running_break = Some(RunningBreak::open(cx, break_type));
+    }
+
+    fn open_scheduled_break(&mut self, cx: &mut AsyncApp) {
+        let scheduled_break = self
+            .scheduled_break
+            .take()
+            .expect("This is only called in the Some() path");
+        self.open_break(cx, scheduled_break.break_type);
+    }
+}
+
+pub fn start_break_scheduler(
+    mut scheduler: BreakScheduler,
+    cx: &mut App,
+    mut event_reader: UnboundedReceiver<SchedulerEvent>,
+) -> Task<()> {
+    cx.spawn(async move |cx| loop {
+        let event = match &scheduler.scheduled_break {
+            Some(scheduled_break) => tokio::select! {
+                event = event_reader.recv() => event,
+                _ = cx.background_executor().timer(scheduled_break.run_at.saturating_duration_since(Instant::now())) => {
+                    scheduler.open_scheduled_break(cx);
+                    continue;
+                }
+            },
+            None => event_reader.recv().await,
+        };
+        let Some(event) = event else { return };
+        if let Some(action) = scheduler.handle(event) {
+            match action {
+                Action::CloseBreak(running_break) => running_break.close(cx),
+                Action::OpenBreak(break_type) => scheduler.open_break(cx, break_type),
+            }
+        }
+    })
+}
+
+impl CliCommand {
+    pub fn handle(
+        self,
+        cx: &mut AsyncApp,
+        event_sender: &UnboundedSender<SchedulerEvent>,
+    ) -> Result<(), SendError<SchedulerEvent>> {
+        let event = match self {
+            Self::Pause => SchedulerEvent::Pause,
+            Self::Resume => SchedulerEvent::Resume,
+            Self::RunBreak { break_type } => SchedulerEvent::RunBreakForced(break_type),
+            Self::Quit => {
+                cx.update(|cx| cx.quit());
+                return Ok(());
+            }
+            Self::Settings => {
+                todo!("Open settings screen");
+            }
+        };
+        event_sender.send(event)
+    }
 }

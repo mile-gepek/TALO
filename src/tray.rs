@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use crate::BreakType;
+use crate::{BreakType, CliCommand};
 
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tray_icon::{
@@ -25,16 +25,6 @@ pub enum TrayMessage {
     ActiveStateChange(bool),
     BreakScheduled(chrono::NaiveTime, BreakType),
     BreakFinished,
-}
-
-/// Events received FROM the tray menu when the user clicks an item.
-#[derive(Debug)]
-pub enum TrayEvent {
-    Pause,
-    Resume,
-    Quit,
-    Settings,
-    RunBreak(BreakType),
 }
 
 fn create_tray(initial_running: bool) -> Sender<TrayMessage> {
@@ -109,20 +99,28 @@ fn create_tray(initial_running: bool) -> Sender<TrayMessage> {
     tray_tx
 }
 
-pub fn tray_listener(initial_running: bool) -> (Sender<TrayMessage>, UnboundedReceiver<TrayEvent>) {
+pub fn tray_listener(
+    initial_running: bool,
+) -> (Sender<TrayMessage>, UnboundedReceiver<CliCommand>) {
     let tray_sender = create_tray(initial_running);
 
     let (tray_event_tx, tray_event_rx) = unbounded_channel();
 
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         let event = match event.id.0.as_str() {
-            ID_BREAK_SHORT => TrayEvent::RunBreak(BreakType::Short),
-            ID_BREAK_LONG => TrayEvent::RunBreak(BreakType::Long),
-            ID_BREAK_INF => TrayEvent::RunBreak(BreakType::Infinite),
-            ID_OPEN_SETTINGS => TrayEvent::Settings,
-            ID_PAUSE => TrayEvent::Pause,
-            ID_RESUME => TrayEvent::Resume,
-            ID_QUIT => TrayEvent::Quit,
+            ID_BREAK_SHORT => CliCommand::RunBreak {
+                break_type: BreakType::Short,
+            },
+            ID_BREAK_LONG => CliCommand::RunBreak {
+                break_type: BreakType::Long,
+            },
+            ID_BREAK_INF => CliCommand::RunBreak {
+                break_type: BreakType::Infinite,
+            },
+            ID_OPEN_SETTINGS => CliCommand::Settings,
+            ID_PAUSE => CliCommand::Pause,
+            ID_RESUME => CliCommand::Resume,
+            ID_QUIT => CliCommand::Quit,
             id => {
                 tracing::warn!("Event from unmatched tray item: {id}");
                 return;
