@@ -366,6 +366,13 @@ impl BreakScheduler {
         let running_break = RunningBreak::open(cx, break_type);
         self.break_state = Some(BreakKind::Running(running_break));
     }
+
+    fn scheduled_break_timer_finished(&mut self, cx: &mut AsyncApp) {
+        let Some(BreakKind::Scheduled(scheduled_break)) = self.break_state else {
+            return;
+        };
+        self.open_break(cx, scheduled_break.break_type);
+    }
 }
 
 pub fn start_break_scheduler(
@@ -378,7 +385,7 @@ pub fn start_break_scheduler(
             Some(BreakKind::Scheduled(scheduled_break)) => tokio::select! {
                 event = event_reader.recv() => event,
                 _ = cx.background_executor().timer(scheduled_break.run_at.saturating_duration_since(Instant::now())) => {
-                    scheduler.open_break(cx, scheduled_break.break_type);
+                    scheduler.scheduled_break_timer_finished(cx);
                     continue;
                 }
             },
