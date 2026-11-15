@@ -254,6 +254,24 @@ enum BreakKind {
     Running(RunningBreak),
 }
 
+impl BreakKind {
+    fn is_running_for(&self, window_id: WindowId) -> bool {
+        match self {
+            BreakKind::Running(running_break) => {
+                running_break.window_handle.window_id() == window_id
+            }
+            _ => false,
+        }
+    }
+
+    fn into_running(self) -> Option<RunningBreak> {
+        match self {
+            Self::Running(running_break) => Some(running_break),
+            _ => None,
+        }
+    }
+}
+
 pub struct BreakScheduler {
     break_state: Option<BreakKind>,
     short_breaks_run: usize,
@@ -329,16 +347,10 @@ impl BreakScheduler {
     }
 
     fn on_window_close(&mut self, window_id: WindowId) -> Option<Action> {
-        let Some(BreakKind::Running(running_break)) =
-            self.break_state.take_if(|break_state| match break_state {
-                BreakKind::Running(running_break) => {
-                    running_break.window_handle.window_id() == window_id
-                }
-                _ => false,
-            })
-        else {
-            return None;
-        };
+        let running_break = self
+            .break_state
+            .take_if(|break_state| break_state.is_running_for(window_id))?
+            .into_running()?;
         _ = self.tray_sender.send(TrayMessage::BreakFinished);
         Some(Action::CloseBreak(running_break))
     }
