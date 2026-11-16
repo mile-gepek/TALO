@@ -167,12 +167,12 @@ impl BreakType {
 
 #[derive(Copy, Clone)]
 struct ScheduledBreak {
-    run_at: NaiveTime,
+    run_at: Instant,
     break_type: BreakType,
 }
 
 impl ScheduledBreak {
-    fn new(run_at: NaiveTime, break_type: BreakType) -> Self {
+    fn new(run_at: Instant, break_type: BreakType) -> Self {
         Self { run_at, break_type }
     }
 
@@ -182,11 +182,11 @@ impl ScheduledBreak {
         } else {
             BreakType::Short
         };
-        let run_at = Local::now().time() + config.break_interval;
+        let run_at = Instant::now() + config.break_interval;
         ScheduledBreak::new(run_at, break_type)
     }
 
-    fn schedule_for(config: &BreakConfig, short_breaks_run: usize, deadline: NaiveTime) -> Self {
+    fn schedule_for(config: &BreakConfig, short_breaks_run: usize, deadline: Instant) -> Self {
         let break_type = if short_breaks_run >= config.long_break_interval {
             BreakType::Long
         } else {
@@ -272,7 +272,7 @@ impl BreakKind {
 }
 
 enum ActiveState {
-    Paused(NaiveTime),
+    Paused(Instant),
     Running,
 }
 
@@ -281,7 +281,7 @@ impl ActiveState {
         if running {
             Self::Running
         } else {
-            Self::Paused(Local::now().time())
+            Self::Paused(Instant::now())
         }
     }
 
@@ -349,7 +349,7 @@ impl BreakScheduler {
 
     fn pause(&mut self) {
         tracing::debug!("Pausing");
-        self.active_state = ActiveState::Paused(Local::now().time());
+        self.active_state = ActiveState::Paused(Instant::now());
         _ = self.tray_sender.send(TrayMessage::ActiveStateChange(false));
     }
 
@@ -373,9 +373,9 @@ impl BreakScheduler {
                 let after_resume_config = &self.config.after_resume_config;
                 let delay = scheduled_break
                     .run_at
-                    .signed_duration_since(paused_at)
+                    .duration_since(paused_at)
                     .max(after_resume_config.min_wait_after_resume);
-                let deadline = Local::now().time() + delay;
+                let deadline = Instant::now() + delay;
                 self.schedule_for(deadline);
                 let run_at_chrono = chrono::Local::now().time() + delay;
                 _ = self
@@ -394,7 +394,7 @@ impl BreakScheduler {
         Some(Action::CloseBreak(running_break))
     }
 
-    fn schedule_for(&mut self, deadline: NaiveTime) {
+    fn schedule_for(&mut self, deadline: Instant) {
         if matches!(self.break_state, Some(BreakKind::Running(..))) {
             return;
         }
@@ -403,8 +403,8 @@ impl BreakScheduler {
             ScheduledBreak::schedule_for(&self.config, self.short_breaks_run, deadline);
         self.break_state = Some(BreakKind::Scheduled(scheduled_break));
 
-        let now = Local::now().time();
-        let time_until_break = scheduled_break.run_at.signed_duration_since(now);
+        let now = Instant::now();
+        let time_until_break = scheduled_break.run_at.duration_since(now);
         let naive_time = chrono::Local::now().time() + time_until_break;
 
         _ = self.tray_sender.send(TrayMessage::BreakScheduled(
@@ -421,8 +421,8 @@ impl BreakScheduler {
         let scheduled_break = ScheduledBreak::schedule(&self.config, self.short_breaks_run);
         self.break_state = Some(BreakKind::Scheduled(scheduled_break));
 
-        let now = Local::now().time();
-        let time_until_break = scheduled_break.run_at.signed_duration_since(now);
+        let now = Instant::now();
+        let time_until_break = scheduled_break.run_at.duration_since(now);
         let naive_time = chrono::Local::now().time() + time_until_break;
 
         _ = self.tray_sender.send(TrayMessage::BreakScheduled(
@@ -455,12 +455,8 @@ pub fn start_break_scheduler(
         loop {
             let event = match &scheduler.break_state {
                 Some(BreakKind::Scheduled(scheduled_break)) => {
-                    let now = Local::now().time();
-                    let time_sleep = scheduled_break
-                        .run_at
-                        .signed_duration_since(now)
-                        .to_std()
-                        .expect("run_at should be later than now");
+                    let now = Instant::now();
+                    let time_sleep = scheduled_break.run_at.duration_since(now);
                     tokio::select! {
                         event = event_reader.recv() => event,
                         _ = {

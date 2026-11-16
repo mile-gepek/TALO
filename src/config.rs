@@ -1,4 +1,4 @@
-use chrono::Duration;
+use std::time::Duration;
 
 pub enum AfterResumeBehavior {
     /// Reschedule the break after resuming the system.
@@ -31,11 +31,11 @@ pub struct BreakConfig {
 impl BreakConfig {
     pub fn new() -> Self {
         BreakConfig {
-            break_interval: Duration::seconds(5),
+            break_interval: Duration::from_secs(5),
             long_break_interval: 3,
             after_resume_config: AfterResumeConfig {
                 behavior: AfterResumeBehavior::KeepTimeRemaining,
-                min_wait_after_resume: Duration::seconds(5),
+                min_wait_after_resume: Duration::from_secs(5),
             },
         }
     }
