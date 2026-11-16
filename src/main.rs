@@ -1,8 +1,9 @@
-use crate::config::BreakConfig;
+use crate::{breaks::SchedulerEvent, config::BreakConfig};
 use clap::{Parser, Subcommand};
 
-use gpui_kit::{App, application, assets};
+use gpui_kit::{App, AsyncApp, application, assets};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{UnboundedSender, error::SendError};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -50,6 +51,28 @@ pub enum CliCommand {
         break_type: BreakType,
     },
     Settings,
+}
+
+impl CliCommand {
+    pub fn handle(
+        self,
+        cx: &mut AsyncApp,
+        event_sender: &UnboundedSender<SchedulerEvent>,
+    ) -> Result<(), SendError<SchedulerEvent>> {
+        let event = match self {
+            Self::Pause => SchedulerEvent::Pause,
+            Self::Resume => SchedulerEvent::Resume,
+            Self::RunBreak { break_type } => SchedulerEvent::RunBreakForced(break_type),
+            Self::Quit => {
+                cx.update(|cx| cx.quit());
+                return Ok(());
+            }
+            Self::Settings => {
+                todo!("Open settings screen");
+            }
+        };
+        event_sender.send(event)
+    }
 }
 
 fn main() {

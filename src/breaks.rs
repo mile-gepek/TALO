@@ -13,10 +13,9 @@ use gpui_kit::{
     layer_shell::LayerShellOptions, prelude::*, px, relative, rems, rgb,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError};
+use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
-    CliCommand,
     config::{AfterResumeBehavior, BreakConfig},
     tray::TrayMessage,
 };
@@ -484,26 +483,4 @@ pub fn start_break_scheduler(
             }
         }
     })
-}
-
-impl CliCommand {
-    pub fn handle(
-        self,
-        cx: &mut AsyncApp,
-        event_sender: &UnboundedSender<SchedulerEvent>,
-    ) -> Result<(), SendError<SchedulerEvent>> {
-        let event = match self {
-            Self::Pause => SchedulerEvent::Pause,
-            Self::Resume => SchedulerEvent::Resume,
-            Self::RunBreak { break_type } => SchedulerEvent::RunBreakForced(break_type),
-            Self::Quit => {
-                cx.update(|cx| cx.quit());
-                return Ok(());
-            }
-            Self::Settings => {
-                todo!("Open settings screen");
-            }
-        };
-        event_sender.send(event)
-    }
 }
