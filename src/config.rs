@@ -18,7 +18,7 @@ pub enum AfterResumeBehavior {
 pub struct AfterResumeConfig {
     pub behavior: AfterResumeBehavior,
     /// Lower bound for the delay before firing a pending break
-    /// after resuming when [`AfterResumeBehavior::OffsetBreak`] is used.
+    /// after resuming when [`AfterResumeBehavior::KeepTimeRemaining`] is used.
     pub min_wait_after_resume: Duration,
 }
 
