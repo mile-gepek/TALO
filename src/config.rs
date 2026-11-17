@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum AfterResumeBehavior {
     /// Reschedule the break after resuming the system.
     Reschedule,
