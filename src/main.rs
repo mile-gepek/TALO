@@ -1,7 +1,7 @@
-use crate::{breaks::SchedulerEvent, config::BreakConfig};
+use crate::{breaks::SchedulerEvent, config::BreakConfig, settings::SettingsGlobal};
 use clap::{Parser, Subcommand};
 
-use gpui_kit::{App, AsyncApp, application, assets};
+use gpui_kit::{App, AsyncApp, application, assets, px, rgb};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedSender, error::SendError};
 use tracing_subscriber::EnvFilter;
@@ -68,7 +68,8 @@ impl CliCommand {
                 return Ok(());
             }
             Self::Settings => {
-                todo!("Open settings screen");
+                cx.update_global::<SettingsGlobal, _>(|settings, cx| settings.open_or_focus(cx));
+                return Ok(());
             }
         };
         event_sender.send(event)
@@ -99,6 +100,20 @@ fn main() {
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
+            gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+            {
+                let theme = gpui_component::Theme::global_mut(cx);
+                theme.radius = px(6.);
+                theme.radius_lg = px(10.);
+                theme.border = rgb(0x333333).into();
+                theme.background = rgb(0x1c1c1c).into();
+                theme.secondary = rgb(0x232323).into();
+                theme.foreground = rgb(0xDADADA).into();
+            }
+            cx.refresh_windows();
+
+            let settings_global = SettingsGlobal::new();
+            cx.set_global(settings_global);
 
             let Some(mut ipc_command_rx) = spawn_socket_watcher(listener) else {
                 tracing::debug!("Secondary instance, quitting");
