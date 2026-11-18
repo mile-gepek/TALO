@@ -7,8 +7,9 @@ use gpui_component::{
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Div, Entity, Global, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, TitlebarOptions, Window, WindowHandle, WindowOptions,
+    AnyElement, App, AppContext, Context, Div, Entity, Global, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Subscription, TitlebarOptions, Window,
+    WindowHandle, WindowOptions,
     base::{Transition, transition},
     div, px, rems,
 };
@@ -73,6 +74,126 @@ impl SettingsGlobal {
             .unwrap();
         self.window_handle = Some(window_handle);
     }
+}
+
+fn min_after_resume_row(
+    view: &SettingsView,
+    enabled: bool,
+    window: &mut Window,
+    mut cx: &mut App,
+) -> Row {
+    let duration = cx.theme().motion_tokens().duration_fast;
+    let easing = &cx.theme().motion_tokens().easing_move;
+
+    let opacity_transition = transition(
+        ("min-after-resume-row", "opacity"),
+        if enabled { 1. } else { 0.5 },
+        Transition::new(duration).easing(easing.clone()),
+        window,
+        &mut cx,
+    );
+
+    let min_after_resume = row(
+        label_with_hint(cx, "Minimum delay after resuming", "In seconds"),
+        number_input(&view.min_after_resume, enabled),
+    );
+
+    min_after_resume
+        .opacity(opacity_transition)
+        .into_any_element()
+}
+
+fn number_input_state(
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+    step: f64,
+) -> Entity<InputState> {
+    cx.new(|cx| InputState::new(window, cx).placeholder("0").step(step))
+}
+
+fn focus_guard(element: impl IntoElement) -> Div {
+    div()
+        .on_mouse_down_out(|_, window, cx| window.blur(cx))
+        .child(element)
+}
+fn number_input(state: &Entity<InputState>, enabled: bool) -> Div {
+    focus_guard(
+        NumberInput::new(state)
+            .flex_none()
+            .min_w(rems(7.))
+            .disabled(!enabled),
+    )
+}
+
+fn rule(cx: &App) -> Div {
+    let rule_color = cx.theme().border;
+    div().h(px(1.)).w_full().bg(rule_color)
+}
+
+fn section(title: Option<&str>, subsections: Vec<Subsection>, cx: &App) -> Div {
+    let padding = rems(1.25);
+
+    let card_color = cx.theme().secondary;
+    let corner_radius = cx.theme().radius * 2;
+    let card = v_flex()
+        .gap_8()
+        .p(padding)
+        .bg(card_color)
+        .rounded(corner_radius)
+        .children(subsections);
+
+    let mut root = v_flex().gap_2();
+    if let Some(title) = title {
+        root = root.child(
+            div()
+                .child(title.to_string())
+                .text_lg()
+                .font_semibold()
+                .ml(padding),
+        );
+    }
+    root.child(card)
+}
+
+fn subsection(title: Option<&str>, options: Vec<Row>, cx: &App) -> Div {
+    let mut root = v_flex();
+    if let Some(title) = title {
+        root = root.child(
+            div()
+                .child(title.to_string())
+                // .text_color(header_text_color)
+                .text_base()
+                .font_semibold()
+                .mb_4(),
+        );
+    }
+    root.child(
+        v_flex()
+            .children(
+                options
+                    .into_iter()
+                    .flat_map(|option| [rule(cx).into_any_element(), option])
+                    .skip(1),
+            )
+            .gap_4(),
+    )
+}
+
+fn row(label: impl IntoElement, control: impl IntoElement) -> Div {
+    let label = v_flex().items_start().flex_grow_1().child(label);
+    h_flex()
+        .justify_between()
+        .items_center()
+        .gap_3()
+        .child(label)
+        .child(control)
+}
+
+fn label_with_hint(cx: &App, label: impl IntoElement, hint: impl IntoElement) -> impl IntoElement {
+    let hint_color = cx.theme().muted_foreground;
+    v_flex()
+        .child(label)
+        .child(div().child(hint).text_sm().text_color(hint_color))
 }
 
 struct SettingsView {
@@ -185,119 +306,6 @@ impl SettingsView {
         )
         .into_any_element()
     }
-}
-
-fn min_after_resume_row(
-    view: &SettingsView,
-    enabled: bool,
-    window: &mut Window,
-    mut cx: &mut App,
-) -> Row {
-    let duration = cx.theme().motion_tokens().duration_fast;
-    let easing = &cx.theme().motion_tokens().easing_move;
-
-    let opacity_transition = transition(
-        ("min-after-resume-row", "opacity"),
-        if enabled { 1. } else { 0.5 },
-        Transition::new(duration).easing(easing.clone()),
-        window,
-        &mut cx,
-    );
-
-    let min_after_resume = row(
-        label_with_hint(cx, "Minimum delay after resuming", "In seconds"),
-        number_input(&view.min_after_resume, enabled),
-    );
-
-    min_after_resume
-        .opacity(opacity_transition)
-        .into_any_element()
-}
-
-fn number_input_state(
-    window: &mut Window,
-    cx: &mut Context<SettingsView>,
-    step: f64,
-) -> Entity<InputState> {
-    cx.new(|cx| InputState::new(window, cx).placeholder("0").step(step))
-}
-
-fn number_input(state: &Entity<InputState>, enabled: bool) -> NumberInput {
-    NumberInput::new(state)
-        .flex_none()
-        .min_w(rems(7.))
-        .disabled(!enabled)
-}
-
-fn rule(cx: &App) -> Div {
-    let rule_color = cx.theme().border;
-    div().h(px(1.)).w_full().bg(rule_color)
-}
-
-fn section(title: Option<&str>, subsections: Vec<Subsection>, cx: &App) -> Div {
-    let padding = rems(1.25);
-
-    let card_color = cx.theme().secondary;
-    let corner_radius = cx.theme().radius * 2;
-    let card = v_flex()
-        .gap_8()
-        .p(padding)
-        .bg(card_color)
-        .rounded(corner_radius)
-        .children(subsections);
-
-    let mut root = v_flex().gap_2();
-    if let Some(title) = title {
-        root = root.child(
-            div()
-                .child(title.to_string())
-                .text_lg()
-                .font_semibold()
-                .ml(padding),
-        );
-    }
-    root.child(card)
-}
-
-fn subsection(title: Option<&str>, options: Vec<Row>, cx: &App) -> Div {
-    let mut root = v_flex();
-    if let Some(title) = title {
-        root = root.child(
-            div()
-                .child(title.to_string())
-                // .text_color(header_text_color)
-                .text_base()
-                .font_semibold()
-                .mb_4(),
-        );
-    }
-    root.child(
-        v_flex()
-            .children(
-                options
-                    .into_iter()
-                    .flat_map(|option| [rule(cx).into_any_element(), option])
-                    .skip(1),
-            )
-            .gap_4(),
-    )
-}
-
-fn row(label: impl IntoElement, control: impl IntoElement) -> Div {
-    let label = v_flex().items_start().flex_grow_1().child(label);
-    h_flex()
-        .justify_between()
-        .items_center()
-        .gap_3()
-        .child(label)
-        .child(control)
-}
-
-fn label_with_hint(cx: &App, label: impl IntoElement, hint: impl IntoElement) -> impl IntoElement {
-    let hint_color = cx.theme().muted_foreground;
-    v_flex()
-        .child(label)
-        .child(div().child(hint).text_sm().text_color(hint_color))
 }
 
 impl Render for SettingsView {
