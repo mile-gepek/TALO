@@ -3,7 +3,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use chrono::{Local, NaiveTime};
 use clap::ValueEnum;
 
 use gpui_component::{Sizable, StyledExt, button::ButtonVariants};
