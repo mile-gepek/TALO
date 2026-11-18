@@ -109,6 +109,7 @@ fn main() {
                 theme.background = rgb(0x1c1c1c).into();
                 theme.secondary = rgb(0x232323).into();
                 theme.foreground = rgb(0xDADADA).into();
+                theme.focus_ring = false;
             }
             cx.refresh_windows();
 
