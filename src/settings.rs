@@ -193,7 +193,7 @@ fn min_after_resume_row(
     window: &mut Window,
     mut cx: &mut App,
 ) -> Row {
-    let duration = cx.theme().motion_tokens().duration_normal;
+    let duration = cx.theme().motion_tokens().duration_fast;
     let easing = &cx.theme().motion_tokens().easing_move;
 
     let opacity_transition = transition(
