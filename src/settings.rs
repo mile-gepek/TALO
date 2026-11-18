@@ -235,18 +235,26 @@ fn rule(cx: &App) -> Div {
 }
 
 fn section(title: Option<&str>, subsections: Vec<Subsection>, cx: &App) -> Div {
+    let padding = rems(1.25);
+
     let card_color = cx.theme().secondary;
     let corner_radius = cx.theme().radius * 2;
     let card = v_flex()
         .gap_8()
-        .p_5()
+        .p(padding)
         .bg(card_color)
         .rounded(corner_radius)
         .children(subsections);
 
     let mut root = v_flex().gap_2();
     if let Some(title) = title {
-        root = root.child(div().child(title.to_string()).text_lg().font_semibold());
+        root = root.child(
+            div()
+                .child(title.to_string())
+                .text_lg()
+                .font_semibold()
+                .ml(padding),
+        );
     }
     root.child(card)
 }
