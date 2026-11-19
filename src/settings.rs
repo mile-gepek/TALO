@@ -291,7 +291,7 @@ impl SettingsView {
                 row(
                     "Behavior after resuming",
                     div()
-                        .w(rems(14.))
+                        .w(rems(12.))
                         .child(Select::new(&self.after_resume).with_size(Size::Medium)),
                 )
                 .into_any_element(),
