@@ -1,5 +1,5 @@
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IndexPath, StyledExt, h_flex,
+    ActiveTheme, Disableable, Icon, IndexPath, Sizable, Size, StyledExt, h_flex,
     input::{InputState, NumberInput},
     scroll::ScrollableElement,
     searchable_list::SearchableListItem,
@@ -121,6 +121,7 @@ fn number_input(state: &Entity<InputState>, enabled: bool) -> Div {
         NumberInput::new(state)
             .flex_none()
             .min_w(rems(7.))
+            .with_size(Size::Medium)
             .disabled(!enabled),
     )
 }
@@ -289,7 +290,9 @@ impl SettingsView {
             vec![
                 row(
                     "Behavior after resuming",
-                    div().w(rems(14.)).child(Select::new(&self.after_resume)),
+                    div()
+                        .w(rems(14.))
+                        .child(Select::new(&self.after_resume).with_size(Size::Medium)),
                 )
                 .into_any_element(),
                 min_after_resume_row(self, keep_time_remaining, window, &mut cx),
