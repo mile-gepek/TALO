@@ -101,8 +101,7 @@ fn main() {
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
             gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
-            {
-                let theme = gpui_component::Theme::global_mut(cx);
+            gpui_component::Theme::update(cx, |theme| {
                 theme.radius = px(6.);
                 theme.radius_lg = px(10.);
                 theme.border = rgb(0x333333).into();
@@ -110,7 +109,7 @@ fn main() {
                 theme.secondary = rgb(0x232323).into();
                 theme.foreground = rgb(0xDADADA).into();
                 theme.focus_ring = false;
-            }
+            });
             cx.refresh_windows();
 
             let settings_global = SettingsGlobal::new();
