@@ -161,12 +161,22 @@ fn subsection(title: Option<&str>, options: Vec<Row>, cx: &App) -> Div {
         root = root.child(
             div()
                 .child(title.to_string())
+                // .text_color(header_text_color)
                 .text_base()
                 .font_semibold()
                 .mb_4(),
         );
     }
-    root.child(v_flex().child(rule(cx)).children(options).gap_4())
+    root.child(
+        v_flex()
+            .children(
+                options
+                    .into_iter()
+                    .flat_map(|option| [rule(cx).into_any_element(), option])
+                    .skip(1),
+            )
+            .gap_4(),
+    )
 }
 
 fn row(label: impl IntoElement, control: impl IntoElement) -> Div {
@@ -278,7 +288,7 @@ impl SettingsView {
             vec![
                 row(
                     "Behavior after resuming",
-                    div().w(rems(12.)).child(Select::new(&self.after_resume)),
+                    div().w(rems(14.)).child(Select::new(&self.after_resume)),
                 )
                 .into_any_element(),
                 min_after_resume_row(self, keep_time_remaining, window, &mut cx),
