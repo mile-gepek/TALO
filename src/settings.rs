@@ -156,12 +156,13 @@ fn section(title: Option<&str>, subsections: Vec<Subsection>, cx: &App) -> Div {
 }
 
 fn subsection(title: Option<&str>, options: Vec<Row>, cx: &App) -> Div {
+    let header_text_color = cx.theme().muted_foreground;
     let mut root = v_flex();
     if let Some(title) = title {
         root = root.child(
             div()
                 .child(title.to_string())
-                // .text_color(header_text_color)
+                .text_color(header_text_color)
                 .text_base()
                 .font_semibold()
                 .mb_4(),
