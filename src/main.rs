@@ -137,8 +137,9 @@ fn main() {
 
                 while let Some(ipc_command) = ipc_command_rx.recv().await {
                     tracing::debug!("Got IPC command: {ipc_command:?}");
-                    if let Err(err) = ipc_command.handle(cx, &event_sender_clone) {
-                        tracing::debug!("Error handling IPC command: {err}")
+                    if ipc_command.handle(cx, &event_sender_clone).is_err() {
+                        tracing::debug!("Event channel disconnected, ending IPC service.");
+                        break;
                     }
                 }
             })
@@ -153,8 +154,9 @@ fn main() {
             cx.spawn(async move |cx| {
                 while let Some(tray_command) = tray_receiver.recv().await {
                     tracing::debug!("Got tray command: {tray_command:?}");
-                    if let Err(err) = tray_command.handle(cx, &event_sender) {
-                        tracing::debug!("Error handling tray command: {err}")
+                    if tray_command.handle(cx, &event_sender).is_err() {
+                        tracing::debug!("Event channel disconnected, ending tray service.");
+                        break;
                     }
                 }
             })
