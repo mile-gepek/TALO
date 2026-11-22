@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
-    config::{AfterResumeBehavior, BreakConfig},
+    config::{AfterResumeBehavior, BreakConfig, CONFIG, Config},
     tray::TrayMessage,
 };
 
@@ -181,7 +181,7 @@ impl ScheduledBreak {
         } else {
             BreakType::Short
         };
-        let run_at = Instant::now() + config.break_interval;
+        let run_at = Instant::now() + config.short_break_interval;
         ScheduledBreak::new(run_at, break_type)
     }
 
@@ -289,6 +289,21 @@ impl ActiveState {
     }
 }
 
+#[derive(Debug)]
+pub enum SchedulerEvent {
+    RunBreakForced(BreakType),
+    Pause,
+    Resume,
+    WindowClosed(WindowId),
+    ReloadConfig,
+}
+
+/// Side-effects of the break system.
+enum Action {
+    OpenBreak(BreakType),
+    CloseBreak(RunningBreak),
+}
+
 pub struct BreakScheduler {
     break_state: Option<BreakKind>,
     short_breaks_run: usize,
@@ -299,26 +314,9 @@ pub struct BreakScheduler {
 
 impl Global for BreakScheduler {}
 
-#[derive(Debug)]
-pub enum SchedulerEvent {
-    RunBreakForced(BreakType),
-    Pause,
-    Resume,
-    WindowClosed(WindowId),
-}
-
-/// Side-effects of the break system.
-enum Action {
-    OpenBreak(BreakType),
-    CloseBreak(RunningBreak),
-}
-
 impl BreakScheduler {
-    pub fn new(
-        config: BreakConfig,
-        run_on_startup: bool,
-        tray_sender: Sender<TrayMessage>,
-    ) -> Self {
+    pub fn new(run_on_startup: bool, tray_sender: Sender<TrayMessage>) -> Self {
+        let config = CONFIG.load().breaks;
         let mut instance = Self {
             short_breaks_run: 0,
             break_state: None,
@@ -342,6 +340,7 @@ impl BreakScheduler {
             SchedulerEvent::RunBreakForced(break_type) => {
                 return Some(Action::OpenBreak(break_type));
             }
+            SchedulerEvent::ReloadConfig => self.reload_config(),
         }
         None
     }
@@ -442,6 +441,16 @@ impl BreakScheduler {
             return;
         };
         self.open_break(cx, scheduled_break.break_type);
+    }
+
+    fn reload_config(&mut self) {
+        match Config::reload() {
+            Ok(config) => {
+                self.config = config.breaks;
+                // TODO: diff the configs and reschedule if needed.
+            }
+            Err(err) => tracing::error!("Error reloading config: '{err}'"),
+        }
     }
 }
 

@@ -12,9 +12,12 @@ gpui-component = "0.9.0"
 gpui-kit = "0.9.0"
 gtk = "0.18.2"
 interprocess = "2.4.8"
+regex = "1.13.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["macros", "sync"] }
+toml = "1.2.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tray-icon = "0.26.1"

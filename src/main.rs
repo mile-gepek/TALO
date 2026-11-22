@@ -1,7 +1,7 @@
-use crate::{breaks::SchedulerEvent, config::BreakConfig, settings::SettingsGlobal};
+use crate::{breaks::SchedulerEvent, settings::SettingsGlobal};
 use clap::{Parser, Subcommand};
 
-use gpui_kit::{App, AsyncApp, application, assets, px, rgb};
+use gpui_kit::{App, AsyncApp, application, assets::Assets, hsla, px};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedSender, error::SendError};
 use tracing_subscriber::EnvFilter;
@@ -13,6 +13,7 @@ use crate::{
 };
 
 mod breaks;
+mod components;
 mod config;
 mod ipc;
 mod settings;
@@ -51,6 +52,7 @@ pub enum CliCommand {
         break_type: BreakType,
     },
     Settings,
+    ReloadConfig,
 }
 
 impl CliCommand {
@@ -71,6 +73,7 @@ impl CliCommand {
                 cx.update_global::<SettingsGlobal, _>(|settings, cx| settings.open_or_focus(cx));
                 return Ok(());
             }
+            Self::ReloadConfig => SchedulerEvent::ReloadConfig,
         };
         event_sender.send(event)
     }
@@ -97,20 +100,17 @@ fn main() {
 
     application()
         .with_quit_mode(gpui_kit::QuitMode::Explicit)
-        .with_assets(assets::Assets)
+        .with_assets(Assets)
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
             gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
             gpui_component::Theme::update(cx, |theme| {
                 theme.radius = px(6.);
                 theme.radius_lg = px(10.);
-                theme.border = rgb(0x333333).into();
-                theme.background = rgb(0x1c1c1c).into();
-                theme.secondary = rgb(0x232323).into();
-                theme.foreground = rgb(0xDADADA).into();
+                theme.border = hsla(0., 0., 0.25, 1.);
+                theme.background = hsla(0.5, 0.05, 0.1, 1.);
                 theme.focus_ring = false;
             });
-            cx.refresh_windows();
 
             let settings_global = SettingsGlobal::new();
             cx.set_global(settings_global);
@@ -123,8 +123,7 @@ fn main() {
 
             let (event_sender, event_reader) = tokio::sync::mpsc::unbounded_channel();
 
-            let break_config = BreakConfig::new();
-            let runner = BreakScheduler::new(break_config, run_on_startup, tray_sender);
+            let runner = BreakScheduler::new(run_on_startup, tray_sender);
             start_break_scheduler(runner, cx, event_reader).detach();
 
             let event_sender_clone = event_sender.clone();

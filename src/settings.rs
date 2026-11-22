@@ -1,20 +1,26 @@
+use std::time::Duration;
+
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IndexPath, Sizable, Size, StyledExt, h_flex,
     input::{InputState, NumberInput},
     scroll::ScrollableElement,
     searchable_list::SearchableListItem,
-    select::{Select, SelectEvent, SelectState},
+    select::Select,
     v_flex,
 };
 use gpui_kit::{
     AnyElement, App, AppContext, Context, Div, Entity, Global, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, TitlebarOptions, Window,
-    WindowHandle, WindowOptions,
+    ParentElement, Render, SharedString, Styled, TitlebarOptions, Window, WindowHandle,
+    WindowOptions,
     base::{Transition, transition},
     div, px, rems,
 };
 
-use crate::config::AfterResumeBehavior;
+use crate::{
+    components::InputField,
+    config::{self, CONFIG},
+};
+use crate::{components::SelectInput, config::AfterResumeBehavior};
 
 type Row = AnyElement;
 type Subsection = AnyElement;
@@ -116,11 +122,12 @@ fn focus_guard(element: impl IntoElement) -> Div {
         .on_mouse_down_out(|_, window, cx| window.blur(cx))
         .child(element)
 }
+
 fn number_input(state: &Entity<InputState>, enabled: bool) -> Div {
     focus_guard(
         NumberInput::new(state)
             .flex_none()
-            .min_w(rems(7.))
+            .min_w(rems(7.5))
             .with_size(Size::Medium)
             .disabled(!enabled),
     )
@@ -199,41 +206,90 @@ fn label_with_hint(cx: &App, label: impl IntoElement, hint: impl IntoElement) ->
 }
 
 struct SettingsView {
-    short_break_duration: Entity<InputState>,
-    short_break_interval: Entity<InputState>,
-    long_break_duration: Entity<InputState>,
-    long_break_after: Entity<InputState>,
-    after_resume: Entity<SelectState<Vec<AfterResumeBehavior>>>,
+    short_break_duration: InputField<f32>,
+    short_break_interval: InputField<f32>,
+    long_break_duration: InputField<f32>,
+    long_break_interval: InputField<usize>,
+    after_resume: SelectInput<Vec<AfterResumeBehavior>>,
     min_after_resume: Entity<InputState>,
-    _after_resume_subscription: Subscription,
 }
 
 impl SettingsView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let after_resume = cx.new(|cx| {
-            SelectState::new(
-                vec![
-                    AfterResumeBehavior::KeepTimeRemaining,
-                    AfterResumeBehavior::Reschedule,
-                ],
-                Some(IndexPath::new(0)),
-                window,
-                cx,
-            )
-        });
-        let _after_resume_subscription = cx.subscribe(
-            &after_resume,
-            |_, _, _: &SelectEvent<Vec<AfterResumeBehavior>>, cx| cx.notify(),
+        let current_config = CONFIG.load_full();
+
+        let short_break_duration = InputField::new(
+            current_config.breaks.short_break_duration.as_secs_f32(),
+            window,
+            cx,
+            |_, seconds, _, _| {
+                config::update(|config| {
+                    config.breaks.short_break_duration = Duration::from_secs_f32(*seconds);
+                })
+                .unwrap();
+            },
+        );
+        let short_break_interval = InputField::new(
+            current_config.breaks.short_break_interval.as_secs_f32() / 60.,
+            window,
+            cx,
+            |_, minutes, _, _| {
+                config::update(|config| {
+                    let seconds = minutes * 60.;
+                    config.breaks.short_break_interval = Duration::from_secs_f32(seconds);
+                })
+                .unwrap();
+            },
+        );
+        let long_break_duration = InputField::new(
+            current_config.breaks.long_break_duration.as_secs_f32(),
+            window,
+            cx,
+            |_, seconds, _, _| {
+                config::update(|config| {
+                    config.breaks.long_break_duration = Duration::from_secs_f32(*seconds);
+                })
+                .unwrap();
+            },
+        );
+        let long_break_interval = InputField::new(
+            current_config.breaks.long_break_interval,
+            window,
+            cx,
+            |_, count, _, _| {
+                config::update(|config| {
+                    config.breaks.long_break_interval = *count;
+                })
+                .unwrap();
+            },
+        );
+
+        let after_resume = SelectInput::new(
+            vec![
+                AfterResumeBehavior::KeepTimeRemaining,
+                AfterResumeBehavior::Reschedule,
+            ],
+            Some(IndexPath::new(0)),
+            window,
+            cx,
+            |_, value, _, _| {
+                config::update(|config| {
+                    let Some(value) = value else {
+                        return;
+                    };
+                    config.breaks.after_resume_config.behavior = *value;
+                })
+                .unwrap();
+            },
         );
 
         Self {
-            short_break_duration: number_input_state(window, cx, 1.),
-            short_break_interval: number_input_state(window, cx, 1.),
-            long_break_duration: number_input_state(window, cx, 1.),
-            long_break_after: number_input_state(window, cx, 1.),
+            short_break_duration,
+            short_break_interval,
+            long_break_duration,
+            long_break_interval,
             after_resume,
             min_after_resume: number_input_state(window, cx, 1.),
-            _after_resume_subscription,
         }
     }
 
@@ -259,17 +315,17 @@ impl SettingsView {
             vec![
                 row(
                     label_with_hint(cx, "Short break duration", "In seconds"),
-                    number_input(&self.short_break_duration, true),
+                    number_input(&self.short_break_duration.state(), true),
                 )
                 .into_any_element(),
                 row(
                     label_with_hint(cx, "Interval between short breaks", "In minutes"),
-                    number_input(&self.short_break_interval, true),
+                    number_input(&self.short_break_interval.state(), true),
                 )
                 .into_any_element(),
                 row(
                     label_with_hint(cx, "Long break duration", "In seconds"),
-                    number_input(&self.long_break_duration, true),
+                    number_input(&self.long_break_duration.state(), true),
                 )
                 .into_any_element(),
                 row(
@@ -278,7 +334,7 @@ impl SettingsView {
                         "Interval between long breaks",
                         "Number of short breaks before a long break",
                     ),
-                    number_input(&self.long_break_after, true),
+                    number_input(&self.long_break_interval.state(), true),
                 )
                 .into_any_element(),
             ],
@@ -292,7 +348,7 @@ impl SettingsView {
                     "Behavior after resuming",
                     div()
                         .w(rems(12.))
-                        .child(Select::new(&self.after_resume).with_size(Size::Medium)),
+                        .child(Select::new(&self.after_resume.state()).with_size(Size::Medium)),
                 )
                 .into_any_element(),
                 min_after_resume_row(self, keep_time_remaining, window, &mut cx),
@@ -315,7 +371,7 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let keep_time_remaining =
-            self.after_resume.read(cx).selected_index(cx) == Some(IndexPath::new(0));
+            self.after_resume.state().read(cx).selected_index(cx) == Some(IndexPath::new(0));
 
         v_flex()
             .size_full()
