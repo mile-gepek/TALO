@@ -83,8 +83,13 @@ pub fn claim_or_forward(socket_path: PathBuf, command: Option<CliCommand>) -> io
 
 pub fn spawn_socket_watcher(
     listener: LocalSocketListener,
+    initial_command: Option<CliCommand>,
 ) -> Option<UnboundedReceiver<CliCommand>> {
     let (ipc_command_tx, ipc_command_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    if let Some(initial_command) = initial_command {
+        _ = ipc_command_tx.send(initial_command);
+    }
 
     std::thread::spawn(move || {
         let mut buffer = String::with_capacity(128);
@@ -131,13 +136,9 @@ impl IpcService {
         initial_command: Option<CliCommand>,
         cx: &mut App,
     ) -> Option<Entity<Self>> {
-        let mut ipc_command_rx = spawn_socket_watcher(listener)?;
+        let mut ipc_command_rx = spawn_socket_watcher(listener, initial_command)?;
 
         let ipc_service = cx.new(|cx| {
-            if let Some(initial_command) = initial_command {
-                cx.emit(initial_command);
-            }
-
             let task = cx.spawn(async move |ipc_service, cx| {
                 while let Some(ipc_command) = ipc_command_rx.recv().await {
                     tracing::debug!("Got IPC command: {ipc_command:?}");
