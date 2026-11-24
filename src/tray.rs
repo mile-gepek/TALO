@@ -108,7 +108,7 @@ fn create_tray(initial_running: bool) -> Sender<Vec<TrayMessage>> {
     tray_tx
 }
 
-pub fn tray_listener(
+fn tray_listener(
     initial_running: bool,
 ) -> (Sender<Vec<TrayMessage>>, UnboundedReceiver<CliCommand>) {
     let tray_sender = create_tray(initial_running);

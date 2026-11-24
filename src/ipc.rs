@@ -81,7 +81,7 @@ pub fn claim_or_forward(socket_path: PathBuf, command: Option<CliCommand>) -> io
     }
 }
 
-pub fn spawn_socket_watcher(
+fn spawn_socket_watcher(
     listener: LocalSocketListener,
     initial_command: Option<CliCommand>,
 ) -> UnboundedReceiver<CliCommand> {
