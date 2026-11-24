@@ -142,6 +142,20 @@ fn main() {
                 .detach();
             });
 
+            cx.subscribe(&ipc_service, |_, event, cx| {
+                if matches!(event, CliCommand::Quit) {
+                    cx.quit();
+                }
+            })
+            .detach();
+
+            cx.subscribe(&tray_service, |_, event, cx| {
+                if matches!(event, CliCommand::Quit) {
+                    cx.quit();
+                }
+            })
+            .detach();
+
             cx.set_global(Talo {
                 _break_service: break_service,
                 _ipc_service: ipc_service,
