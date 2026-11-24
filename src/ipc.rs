@@ -104,6 +104,7 @@ pub fn spawn_socket_watcher(
         {
             if let Err(err) = conn.read_line(&mut buffer) {
                 tracing::debug!("Error reading line from socket: {err}");
+                buffer.clear();
                 continue;
             };
             drop(conn);
