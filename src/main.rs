@@ -1,7 +1,7 @@
 use crate::{breaks::BreakService, ipc::IpcService, settings::SettingsGlobal, tray::TrayService};
 use clap::{Parser, Subcommand};
 
-use gpui_kit::{App, Entity, Global, application, assets::Assets, hsla, px};
+use gpui_kit::{App, AppContext, Context, Entity, Global, application, assets::Assets, hsla, px};
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
@@ -64,10 +64,28 @@ pub enum BreakServiceCommand {
     },
 }
 
-struct Talo {
-    _break_service: Entity<BreakService>,
+struct TaloInner {
+    break_service: Entity<BreakService>,
     _ipc_service: Entity<IpcService>,
     _tray_service: Entity<TrayService>,
+}
+
+impl TaloInner {
+    fn handle_command(&mut self, command: CliCommand, cx: &mut Context<Self>) {
+        tracing::debug!("Handling command: {command:?}");
+        match command {
+            CliCommand::Quit => cx.quit(),
+            CliCommand::BreakServiceCommand(break_service_command) => self
+                .break_service
+                .read(cx)
+                .handle_command(break_service_command),
+            _ => {}
+        }
+    }
+}
+
+struct Talo {
+    _inner: Entity<TaloInner>,
 }
 
 impl Global for Talo {}
@@ -114,47 +132,29 @@ fn main() {
 
             tray_service.update(cx, |_, cx| {
                 cx.subscribe(&break_service, |tray_service, _, tray_messages, _| {
-                    tray_service.handle_messages(tray_messages.clone())
+                    tray_service.handle_messages(tray_messages.clone());
                 })
                 .detach();
             });
 
-            break_service.update(cx, |_, cx| {
-                cx.subscribe(&ipc_service, |break_service, _, command, _| {
-                    let CliCommand::BreakServiceCommand(break_service_command) = command else {
-                        return;
-                    };
-                    break_service.handle_command(*break_service_command);
+            let talo = cx.new(|cx| {
+                cx.subscribe(&ipc_service, |talo: &mut TaloInner, _, command, cx| {
+                    talo.handle_command(*command, cx)
                 })
                 .detach();
 
-                cx.subscribe(&tray_service, |break_service, _, command, _| {
-                    let CliCommand::BreakServiceCommand(break_service_command) = command else {
-                        return;
-                    };
-                    break_service.handle_command(*break_service_command);
+                cx.subscribe(&tray_service, |talo: &mut TaloInner, _, command, cx| {
+                    talo.handle_command(*command, cx)
                 })
                 .detach();
-            });
 
-            cx.subscribe(&ipc_service, |_, event, cx| {
-                if matches!(event, CliCommand::Quit) {
-                    cx.quit();
+                TaloInner {
+                    break_service,
+                    _ipc_service: ipc_service,
+                    _tray_service: tray_service,
                 }
-            })
-            .detach();
-
-            cx.subscribe(&tray_service, |_, event, cx| {
-                if matches!(event, CliCommand::Quit) {
-                    cx.quit();
-                }
-            })
-            .detach();
-
-            cx.set_global(Talo {
-                _break_service: break_service,
-                _ipc_service: ipc_service,
-                _tray_service: tray_service,
             });
+
+            cx.set_global(Talo { _inner: talo });
         });
 }
