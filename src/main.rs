@@ -72,7 +72,6 @@ struct TaloInner {
 
 impl TaloInner {
     fn handle_command(&mut self, command: CliCommand, cx: &mut Context<Self>) {
-        tracing::debug!("Handling command: {command:?}");
         match command {
             CliCommand::Quit => cx.quit(),
             CliCommand::BreakServiceCommand(break_service_command) => self
@@ -136,6 +135,14 @@ fn main() {
                 })
                 .detach();
             });
+
+            let break_service_weak = break_service.downgrade();
+            cx.on_window_closed(move |cx, window_id| {
+                _ = break_service_weak.update(cx, |break_service, _| {
+                    break_service.on_window_closed(window_id);
+                });
+            })
+            .detach();
 
             let talo = cx.new(|cx| {
                 cx.subscribe(&ipc_service, |talo: &mut TaloInner, _, command, cx| {

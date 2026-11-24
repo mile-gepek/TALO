@@ -496,7 +496,6 @@ impl BreakService {
                     };
                     let Some(event) = event else { return };
                     if let Some(effect) = scheduler.handle(&event) {
-                        tracing::debug!("Break service effect: {effect:?}");
                         match effect {
                             Effect::OpenBreak(break_type) => scheduler.open_break(cx, break_type),
                             Effect::TrayMessage(tray_messages) => {
@@ -524,5 +523,10 @@ impl BreakService {
     pub fn handle_command(&self, command: BreakServiceCommand) {
         let event = BreakServiceEvent::Command(command);
         _ = self.event_sender.send(event);
+    }
+
+    pub fn on_window_closed(&self, window_id: WindowId) {
+        let event = BreakServiceEvent::WindowClosed(window_id);
+        _ = self.event_sender.send(event)
     }
 }
