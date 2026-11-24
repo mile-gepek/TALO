@@ -299,7 +299,6 @@ enum BreakServiceEvent {
 #[derive(Debug)]
 enum Effect {
     OpenBreak(BreakType),
-    CloseBreak(RunningBreak),
     TrayMessage(Vec<TrayMessage>),
 }
 
@@ -499,7 +498,6 @@ impl BreakService {
                     if let Some(effect) = scheduler.handle(&event) {
                         tracing::debug!("Break service effect: {effect:?}");
                         match effect {
-                            Effect::CloseBreak(running_break) => running_break.close(cx),
                             Effect::OpenBreak(break_type) => scheduler.open_break(cx, break_type),
                             Effect::TrayMessage(tray_messages) => {
                                 if tray_messages.is_empty() {
