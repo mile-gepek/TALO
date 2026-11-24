@@ -38,7 +38,7 @@ pub enum AfterResumeBehavior {
     ///
     /// [`min_wait_after_resume`]: AfterResumeConfig::min_wait_after_resume
     #[default]
-    KeepTimeRemaining,
+    KeepScheduledBreak,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

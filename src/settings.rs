@@ -30,7 +30,7 @@ impl SearchableListItem for AfterResumeBehavior {
 
     fn title(&self) -> SharedString {
         match self {
-            Self::KeepTimeRemaining => "Keep Scheduled Break".into(),
+            Self::KeepScheduledBreak => "Keep Scheduled Break".into(),
             Self::Reschedule => "Reschedule".into(),
         }
     }
@@ -266,7 +266,7 @@ impl SettingsView {
 
         let after_resume = SelectInput::new(
             vec![
-                AfterResumeBehavior::KeepTimeRemaining,
+                AfterResumeBehavior::KeepScheduledBreak,
                 AfterResumeBehavior::Reschedule,
             ],
             Some(IndexPath::new(0)),

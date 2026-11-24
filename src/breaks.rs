@@ -374,7 +374,7 @@ impl BreakServiceState {
         };
         let scheduled_message = match self.config.after_resume_config.behavior {
             AfterResumeBehavior::Reschedule => self.schedule_new(),
-            AfterResumeBehavior::KeepTimeRemaining => {
+            AfterResumeBehavior::KeepScheduledBreak => {
                 let after_resume_config = &self.config.after_resume_config;
                 let delay = scheduled_break
                     .run_at
