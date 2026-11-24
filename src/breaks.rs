@@ -508,10 +508,6 @@ impl BreakService {
                                         return;
                                     };
                                 }
-                                if service.update(cx, |_, cx| cx.emit(tray_messages)).is_err() {
-                                    tracing::warn!("Break service entity dropped, but task wasn't");
-                                    return;
-                                };
                             }
                         }
                     }
