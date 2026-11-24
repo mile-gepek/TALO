@@ -77,6 +77,8 @@ fn create_tray(initial_running: bool) -> Sender<Vec<TrayMessage>> {
             }
             let timeout = Duration::from_millis(50);
             if let Ok(messages) = tray_rx.recv_timeout(timeout) {
+                tracing::debug!("Received tray updates: {messages:?}");
+
                 for message in messages {
                     match message {
                         TrayMessage::Paused => {
@@ -153,6 +155,8 @@ impl TrayService {
 
             let task = cx.spawn(async move |tray_service, cx| {
                 while let Some(tray_command) = tray_event_rx.recv().await {
+                    tracing::debug!("Got tray command: {tray_command:?}");
+
                     if tray_service
                         .update(cx, |_, cx| {
                             cx.emit(tray_command);
