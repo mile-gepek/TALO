@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use gpui_kit::{App, AppContext, Entity, EventEmitter, Task};
 use interprocess::local_socket::{GenericFilePath, ListenerOptions, Name, prelude::*};
 use tokio::sync::mpsc::UnboundedReceiver;
 
@@ -116,4 +117,45 @@ pub fn spawn_socket_watcher(
     });
 
     Some(ipc_command_rx)
+}
+
+pub struct IpcService {
+    _task: Task<()>,
+}
+
+impl EventEmitter<CliCommand> for IpcService {}
+
+impl IpcService {
+    pub fn start_with_listener(
+        listener: LocalSocketListener,
+        initial_command: Option<CliCommand>,
+        cx: &mut App,
+    ) -> Option<Entity<Self>> {
+        let mut ipc_command_rx = spawn_socket_watcher(listener)?;
+
+        let ipc_service = cx.new(|cx| {
+            if let Some(initial_command) = initial_command {
+                cx.emit(initial_command);
+            }
+
+            let task = cx.spawn(async move |ipc_service, cx| {
+                while let Some(ipc_command) = ipc_command_rx.recv().await {
+                    tracing::debug!("Got IPC command: {ipc_command:?}");
+
+                    if ipc_service
+                        .update(cx, |_, cx| {
+                            cx.emit(ipc_command);
+                        })
+                        .is_err()
+                    {
+                        tracing::warn!("IPC service dropped while task was running");
+                        break;
+                    }
+                }
+            });
+
+            Self { _task: task }
+        });
+        Some(ipc_service)
+    }
 }

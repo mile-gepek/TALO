@@ -3,18 +3,23 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::NaiveTime;
 use clap::ValueEnum;
 
 use gpui_component::{Sizable, StyledExt, button::ButtonVariants};
 use gpui_kit::{
-    Animation, AnimationExt, App, AsyncApp, Context, Global, Task, TitlebarOptions, Window,
-    WindowHandle, WindowId, WindowOptions, component::button::Button, div,
+    Animation, AnimationExt, App, AsyncApp, Context, Entity, EventEmitter, Global, Task,
+    TitlebarOptions, Window, WindowHandle, WindowId, WindowOptions, component::button::Button, div,
     layer_shell::LayerShellOptions, prelude::*, px, relative, rems, rgb,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::{
+    Notify,
+    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+};
 
 use crate::{
+    BreakServiceCommand,
     config::{AfterResumeBehavior, BreakConfig, CONFIG, Config},
     tray::TrayMessage,
 };
@@ -195,6 +200,7 @@ impl ScheduledBreak {
     }
 }
 
+#[derive(Debug)]
 struct RunningBreak {
     window_handle: WindowHandle<BreakView>,
     _window_close_task: Option<Task<()>>,
@@ -253,10 +259,10 @@ enum BreakKind {
 }
 
 impl BreakKind {
-    fn is_running_for(&self, window_id: WindowId) -> bool {
+    fn is_running_for(&self, window_id: &WindowId) -> bool {
         match self {
             BreakKind::Running(running_break) => {
-                running_break.window_handle.window_id() == window_id
+                &running_break.window_handle.window_id() == window_id
             }
             _ => false,
         }
@@ -290,83 +296,84 @@ impl ActiveState {
 }
 
 #[derive(Debug)]
-pub enum SchedulerEvent {
-    RunBreakForced(BreakType),
-    Pause,
-    Resume,
-    WindowClosed(WindowId),
+enum BreakServiceEvent {
+    Command(BreakServiceCommand),
     ReloadConfig,
+    WindowClosed(WindowId),
 }
 
 /// Side-effects of the break system.
-enum Action {
+#[derive(Debug)]
+enum Effect {
     OpenBreak(BreakType),
     CloseBreak(RunningBreak),
+    TrayMessage(Vec<TrayMessage>),
 }
 
-pub struct BreakScheduler {
+struct BreakServiceState {
     break_state: Option<BreakKind>,
     short_breaks_run: usize,
     active_state: ActiveState,
     config: BreakConfig,
-    tray_sender: Sender<TrayMessage>,
 }
 
-impl Global for BreakScheduler {}
-
-impl BreakScheduler {
-    pub fn new(run_on_startup: bool, tray_sender: Sender<TrayMessage>) -> Self {
+impl BreakServiceState {
+    pub fn new(run_on_startup: bool) -> Self {
         let config = CONFIG.load().breaks;
-        let mut instance = Self {
+        Self {
             short_breaks_run: 0,
             break_state: None,
             active_state: ActiveState::new(run_on_startup),
             config,
-            tray_sender,
-        };
-        if run_on_startup {
-            instance.schedule();
         }
-        instance
     }
 
-    fn handle(&mut self, event: SchedulerEvent) -> Option<Action> {
+    fn handle(&mut self, event: &BreakServiceEvent) -> Option<Effect> {
         match event {
-            SchedulerEvent::Pause => self.pause(),
-            SchedulerEvent::Resume => self.resume(),
-            SchedulerEvent::WindowClosed(window_id) => {
-                return self.on_window_close(window_id);
+            BreakServiceEvent::Command(command) => match command {
+                BreakServiceCommand::Pause => {
+                    return Some(Effect::TrayMessage(self.pause().into_iter().collect()));
+                }
+                BreakServiceCommand::Resume => return Some(Effect::TrayMessage(self.resume())),
+                BreakServiceCommand::RunBreak { break_type } => {
+                    return Some(Effect::OpenBreak(*break_type));
+                }
+            },
+            BreakServiceEvent::WindowClosed(window_id) => {
+                return self
+                    .on_window_close(window_id)
+                    .map(|tray_message| Effect::TrayMessage(vec![tray_message]));
             }
-            SchedulerEvent::RunBreakForced(break_type) => {
-                return Some(Action::OpenBreak(break_type));
+            BreakServiceEvent::ReloadConfig => {
+                self.reload_config();
             }
-            SchedulerEvent::ReloadConfig => self.reload_config(),
         }
         None
     }
 
-    fn pause(&mut self) {
+    fn pause(&mut self) -> Option<TrayMessage> {
+        if matches!(self.active_state, ActiveState::Paused(..)) {
+            return None;
+        }
         tracing::debug!("Pausing");
         self.active_state = ActiveState::Paused(Instant::now());
-        _ = self.tray_sender.send(TrayMessage::ActiveStateChange(false));
+        Some(TrayMessage::Paused)
     }
 
-    fn resume(&mut self) {
+    fn resume(&mut self) -> Vec<TrayMessage> {
+        let mut messages = Vec::with_capacity(2);
         let ActiveState::Paused(paused_at) = self.active_state else {
-            return;
+            return messages;
         };
         tracing::debug!("Resuming");
         self.active_state = ActiveState::Running;
-        _ = self.tray_sender.send(TrayMessage::ActiveStateChange(true));
+        messages.push(TrayMessage::Resumed);
         let Some(BreakKind::Scheduled(scheduled_break)) = self.break_state.as_ref() else {
-            self.schedule();
-            return;
+            messages.extend(self.schedule_new());
+            return messages;
         };
-        let break_type = scheduled_break.break_type;
-        match self.config.after_resume_config.behavior {
-            AfterResumeBehavior::Reschedule => {
-                self.schedule();
-            }
+        let scheduled_message = match self.config.after_resume_config.behavior {
+            AfterResumeBehavior::Reschedule => self.schedule_new(),
             AfterResumeBehavior::KeepTimeRemaining => {
                 let after_resume_config = &self.config.after_resume_config;
                 let delay = scheduled_break
@@ -374,62 +381,56 @@ impl BreakScheduler {
                     .duration_since(paused_at)
                     .max(after_resume_config.min_wait_after_resume);
                 let deadline = Instant::now() + delay;
-                self.schedule_for(deadline);
-                let run_at_chrono = chrono::Local::now().time() + delay;
-                _ = self
-                    .tray_sender
-                    .send(TrayMessage::BreakScheduled(run_at_chrono, break_type));
+                self.schedule_for(deadline)
             }
+        };
+        messages.extend(scheduled_message);
+        messages
+    }
+
+    fn on_window_close(&mut self, window_id: &WindowId) -> Option<TrayMessage> {
+        self.break_state
+            .take_if(|break_state| break_state.is_running_for(window_id))?;
+        match self.active_state {
+            ActiveState::Running => self.schedule_new(),
+            _ => Some(TrayMessage::BreakFinished),
         }
     }
 
-    fn on_window_close(&mut self, window_id: WindowId) -> Option<Action> {
-        let running_break = self
-            .break_state
-            .take_if(|break_state| break_state.is_running_for(window_id))?
-            .into_running()?;
-        _ = self.tray_sender.send(TrayMessage::BreakFinished);
-        Some(Action::CloseBreak(running_break))
-    }
-
-    fn schedule_for(&mut self, deadline: Instant) {
+    fn schedule_for(&mut self, deadline: Instant) -> Option<TrayMessage> {
         if matches!(self.break_state, Some(BreakKind::Running(..))) {
-            return;
+            return None;
         }
-        tracing::debug!("Scheduling break");
         let scheduled_break =
             ScheduledBreak::schedule_for(&self.config, self.short_breaks_run, deadline);
         self.break_state = Some(BreakKind::Scheduled(scheduled_break));
-
-        let now = Instant::now();
-        let time_until_break = scheduled_break.run_at.duration_since(now);
-        let naive_time = chrono::Local::now().time() + time_until_break;
-
-        _ = self.tray_sender.send(TrayMessage::BreakScheduled(
-            naive_time,
-            scheduled_break.break_type,
-        ));
+        Some(self.break_scheduled_message(scheduled_break))
     }
 
-    fn schedule(&mut self) {
+    fn schedule_new(&mut self) -> Option<TrayMessage> {
         if matches!(self.break_state, Some(BreakKind::Running(..))) {
-            return;
+            return None;
         }
-        tracing::debug!("Scheduling break");
         let scheduled_break = ScheduledBreak::schedule(&self.config, self.short_breaks_run);
         self.break_state = Some(BreakKind::Scheduled(scheduled_break));
+        Some(self.break_scheduled_message(scheduled_break))
+    }
 
+    fn break_scheduled_message(&mut self, scheduled_break: ScheduledBreak) -> TrayMessage {
         let now = Instant::now();
         let time_until_break = scheduled_break.run_at.duration_since(now);
         let naive_time = chrono::Local::now().time() + time_until_break;
 
-        _ = self.tray_sender.send(TrayMessage::BreakScheduled(
-            naive_time,
-            scheduled_break.break_type,
-        ));
+        let time_formatted = naive_time.format("%H:%M:%S");
+        tracing::info!("Scheduling break for {time_formatted}");
+
+        TrayMessage::Scheduled(naive_time, scheduled_break.break_type)
     }
 
     fn open_break(&mut self, cx: &mut AsyncApp, break_type: BreakType) {
+        if let Some(BreakKind::Running(running_break)) = &self.break_state {
+            running_break.close(cx);
+        }
         let running_break = RunningBreak::open(cx, break_type);
         self.break_state = Some(BreakKind::Running(running_break));
     }
@@ -454,37 +455,82 @@ impl BreakScheduler {
     }
 }
 
-pub fn start_break_scheduler(
-    mut scheduler: BreakScheduler,
-    cx: &mut App,
-    mut event_reader: UnboundedReceiver<SchedulerEvent>,
-) -> Task<()> {
-    cx.spawn(async move |cx| {
-        loop {
-            let event = match &scheduler.break_state {
-                Some(BreakKind::Scheduled(scheduled_break)) => {
-                    let now = Instant::now();
-                    let time_sleep = scheduled_break.run_at.duration_since(now);
-                    tokio::select! {
-                        event = event_reader.recv() => event,
-                        _ = {
-                            cx.background_executor().timer(time_sleep)
-                        },
-                        if scheduler.active_state.running() => {
-                            scheduler.on_scheduled_break_timer_finished(cx);
-                            continue;
+pub struct BreakService {
+    event_sender: UnboundedSender<BreakServiceEvent>,
+    _task: Task<()>,
+}
+
+impl EventEmitter<Vec<TrayMessage>> for BreakService {}
+
+impl BreakService {
+    pub fn start(run_on_startup: bool, cx: &mut App) -> Entity<Self> {
+        let (event_sender, mut event_reader) = unbounded_channel();
+
+        cx.new(|cx| {
+            let task = cx.spawn(async move |service, cx| {
+                let mut scheduler = BreakServiceState::new(run_on_startup);
+                let tray_message = if run_on_startup {
+                    scheduler
+                        .schedule_new()
+                        .expect("No running break on startup, so this is always Some")
+                } else {
+                    TrayMessage::Paused
+                };
+                if service
+                    .update(cx, |_, cx| cx.emit(vec![tray_message]))
+                    .is_err()
+                {
+                    tracing::warn!("Break service entity dropped, but task wasn't");
+                    return;
+                };
+
+                loop {
+                    let event = match &scheduler.break_state {
+                        Some(BreakKind::Scheduled(scheduled_break)) => {
+                            let now = Instant::now();
+                            let time_sleep = scheduled_break.run_at.duration_since(now);
+                            tokio::select! {
+                                event = event_reader.recv() => event,
+                                _ = {
+                                    cx.background_executor().timer(time_sleep)
+                                },
+                                if scheduler.active_state.running() => {
+                                    scheduler.on_scheduled_break_timer_finished(cx);
+                                    continue;
+                                }
+                            }
+                        }
+                        _ => event_reader.recv().await,
+                    };
+                    let Some(event) = event else { return };
+                    if let Some(effect) = scheduler.handle(&event) {
+                        tracing::debug!("Break service effect: {effect:?}");
+                        match effect {
+                            Effect::CloseBreak(running_break) => running_break.close(cx),
+                            Effect::OpenBreak(break_type) => scheduler.open_break(cx, break_type),
+                            Effect::TrayMessage(tray_messages) => {
+                                if tray_messages.is_empty() {
+                                    return;
+                                }
+                                if service.update(cx, |_, cx| cx.emit(tray_messages)).is_err() {
+                                    tracing::warn!("Break service entity dropped, but task wasn't");
+                                    return;
+                                };
+                            }
                         }
                     }
                 }
-                _ => event_reader.recv().await,
-            };
-            let Some(event) = event else { return };
-            if let Some(action) = scheduler.handle(event) {
-                match action {
-                    Action::CloseBreak(running_break) => running_break.close(cx),
-                    Action::OpenBreak(break_type) => scheduler.open_break(cx, break_type),
-                }
+            });
+
+            Self {
+                event_sender,
+                _task: task,
             }
-        }
-    })
+        })
+    }
+
+    pub fn handle_command(&self, command: BreakServiceCommand) {
+        let event = BreakServiceEvent::Command(command);
+        _ = self.event_sender.send(event);
+    }
 }

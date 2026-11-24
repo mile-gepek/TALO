@@ -3,8 +3,9 @@ use std::{
     time::Duration,
 };
 
-use crate::{BreakType, CliCommand};
+use crate::{BreakServiceCommand, BreakType, CliCommand};
 
+use gpui_kit::{App, AppContext, Entity, EventEmitter, Task};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tray_icon::{
     TrayIconBuilder,
@@ -21,13 +22,15 @@ const ID_RESUME: &str = "resume";
 const ID_QUIT: &str = "quit";
 
 /// Message sent TO the tray handler, to update the menu.
+#[derive(Copy, Clone, Debug)]
 pub enum TrayMessage {
-    ActiveStateChange(bool),
-    BreakScheduled(chrono::NaiveTime, BreakType),
+    Paused,
+    Resumed,
+    Scheduled(chrono::NaiveTime, BreakType),
     BreakFinished,
 }
 
-fn create_tray(initial_running: bool) -> Sender<TrayMessage> {
+fn create_tray(initial_running: bool) -> Sender<Vec<TrayMessage>> {
     let (tray_tx, tray_rx) = channel();
 
     std::thread::spawn(move || {
@@ -73,23 +76,27 @@ fn create_tray(initial_running: bool) -> Sender<TrayMessage> {
                 }
             }
             let timeout = Duration::from_millis(50);
-            if let Ok(message) = tray_rx.recv_timeout(timeout) {
-                match message {
-                    TrayMessage::ActiveStateChange(running) => {
-                        pause_item.set_enabled(running);
-                        resume_item.set_enabled(!running);
+            if let Ok(messages) = tray_rx.recv_timeout(timeout) {
+                for message in messages {
+                    match message {
+                        TrayMessage::Paused => {
+                            pause_item.set_enabled(false);
+                            resume_item.set_enabled(true);
 
-                        if !running {
                             status_item.set_text("Idle")
                         }
-                    }
-                    TrayMessage::BreakScheduled(scheduled_time, break_type) => {
-                        let formatted = scheduled_time.format("%H:%M:%S");
-                        let status_text = format!("{break_type:?} break at {formatted}");
-                        status_item.set_text(status_text);
-                    }
-                    TrayMessage::BreakFinished => {
-                        status_item.set_text("Idle");
+                        TrayMessage::Resumed => {
+                            pause_item.set_enabled(true);
+                            resume_item.set_enabled(false);
+                        }
+                        TrayMessage::Scheduled(scheduled_time, break_type) => {
+                            let formatted = scheduled_time.format("%H:%M:%S");
+                            let status_text = format!("{break_type:?} break at {formatted}");
+                            status_item.set_text(status_text);
+                        }
+                        TrayMessage::BreakFinished => {
+                            status_item.set_text("Idle");
+                        }
                     }
                 }
             }
@@ -101,25 +108,25 @@ fn create_tray(initial_running: bool) -> Sender<TrayMessage> {
 
 pub fn tray_listener(
     initial_running: bool,
-) -> (Sender<TrayMessage>, UnboundedReceiver<CliCommand>) {
+) -> (Sender<Vec<TrayMessage>>, UnboundedReceiver<CliCommand>) {
     let tray_sender = create_tray(initial_running);
 
     let (tray_event_tx, tray_event_rx) = unbounded_channel();
 
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         let event = match event.id.0.as_str() {
-            ID_BREAK_SHORT => CliCommand::RunBreak {
+            ID_BREAK_SHORT => CliCommand::BreakServiceCommand(BreakServiceCommand::RunBreak {
                 break_type: BreakType::Short,
-            },
-            ID_BREAK_LONG => CliCommand::RunBreak {
+            }),
+            ID_BREAK_LONG => CliCommand::BreakServiceCommand(BreakServiceCommand::RunBreak {
                 break_type: BreakType::Long,
-            },
-            ID_BREAK_INF => CliCommand::RunBreak {
+            }),
+            ID_BREAK_INF => CliCommand::BreakServiceCommand(BreakServiceCommand::RunBreak {
                 break_type: BreakType::Infinite,
-            },
+            }),
+            ID_PAUSE => CliCommand::BreakServiceCommand(BreakServiceCommand::Pause),
+            ID_RESUME => CliCommand::BreakServiceCommand(BreakServiceCommand::Resume),
             ID_OPEN_SETTINGS => CliCommand::Settings,
-            ID_PAUSE => CliCommand::Pause,
-            ID_RESUME => CliCommand::Resume,
             ID_QUIT => CliCommand::Quit,
             id => {
                 tracing::warn!("Event from unmatched tray item: {id}");
@@ -130,4 +137,41 @@ pub fn tray_listener(
     }));
 
     (tray_sender, tray_event_rx)
+}
+
+pub struct TrayService {
+    sender: Sender<Vec<TrayMessage>>,
+    _task: Task<()>,
+}
+
+impl EventEmitter<CliCommand> for TrayService {}
+
+impl TrayService {
+    pub fn start(initial_running: bool, cx: &mut App) -> Entity<Self> {
+        cx.new(|cx| {
+            let (tray_sender, mut tray_event_rx) = tray_listener(initial_running);
+
+            let task = cx.spawn(async move |tray_service, cx| {
+                while let Some(tray_command) = tray_event_rx.recv().await {
+                    if tray_service
+                        .update(cx, |_, cx| {
+                            cx.emit(tray_command);
+                        })
+                        .is_err()
+                    {
+                        tracing::debug!("Tray service dropped before task")
+                    }
+                }
+            });
+
+            Self {
+                sender: tray_sender,
+                _task: task,
+            }
+        })
+    }
+
+    pub fn handle_messages(&self, messages: Vec<TrayMessage>) {
+        _ = self.sender.send(messages);
+    }
 }

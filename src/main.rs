@@ -1,15 +1,13 @@
-use crate::{breaks::SchedulerEvent, settings::SettingsGlobal};
+use crate::{breaks::BreakService, ipc::IpcService, settings::SettingsGlobal, tray::TrayService};
 use clap::{Parser, Subcommand};
 
-use gpui_kit::{App, AsyncApp, application, assets::Assets, hsla, px};
+use gpui_kit::{App, Entity, Global, application, assets::Assets, hsla, px};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{UnboundedSender, error::SendError};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    breaks::{BreakScheduler, BreakType, start_break_scheduler},
+    breaks::BreakType,
     ipc::{IpcRole, claim_or_forward, default_socket_path, spawn_socket_watcher},
-    tray::tray_listener,
 };
 
 mod breaks;
@@ -36,13 +34,26 @@ impl Args {
     }
 
     fn command_none_or_resume(command: Option<CliCommand>) -> bool {
-        command.is_none_or(|command| matches!(command, CliCommand::Resume))
+        command.is_none_or(|command| {
+            matches!(
+                command,
+                CliCommand::BreakServiceCommand(BreakServiceCommand::Resume)
+            )
+        })
     }
 }
 
 #[derive(Copy, Clone, Subcommand, Debug, Serialize, Deserialize)]
 pub enum CliCommand {
     Quit,
+    Settings,
+    ReloadConfig,
+    #[command(flatten)]
+    BreakServiceCommand(BreakServiceCommand),
+}
+
+#[derive(Copy, Clone, Subcommand, Debug, Serialize, Deserialize)]
+pub enum BreakServiceCommand {
     Pause,
     Resume,
     /// Run a break manually
@@ -51,33 +62,15 @@ pub enum CliCommand {
         #[arg(value_enum, default_value_t = BreakType::Short)]
         break_type: BreakType,
     },
-    Settings,
-    ReloadConfig,
 }
 
-impl CliCommand {
-    pub fn handle(
-        self,
-        cx: &mut AsyncApp,
-        event_sender: &UnboundedSender<SchedulerEvent>,
-    ) -> Result<(), SendError<SchedulerEvent>> {
-        let event = match self {
-            Self::Pause => SchedulerEvent::Pause,
-            Self::Resume => SchedulerEvent::Resume,
-            Self::RunBreak { break_type } => SchedulerEvent::RunBreakForced(break_type),
-            Self::Quit => {
-                cx.update(|cx| cx.quit());
-                return Ok(());
-            }
-            Self::Settings => {
-                cx.update_global::<SettingsGlobal, _>(|settings, cx| settings.open_or_focus(cx));
-                return Ok(());
-            }
-            Self::ReloadConfig => SchedulerEvent::ReloadConfig,
-        };
-        event_sender.send(event)
-    }
+struct Talo {
+    _break_service: Entity<BreakService>,
+    _ipc_service: Entity<IpcService>,
+    _tray_service: Entity<TrayService>,
 }
+
+impl Global for Talo {}
 
 fn main() {
     let args = Args::parse();
@@ -96,8 +89,6 @@ fn main() {
         return;
     };
 
-    let (tray_sender, mut tray_receiver) = tray_listener(run_on_startup);
-
     application()
         .with_quit_mode(gpui_kit::QuitMode::Explicit)
         .with_assets(Assets)
@@ -115,50 +106,46 @@ fn main() {
             let settings_global = SettingsGlobal::new();
             cx.set_global(settings_global);
 
-            let Some(mut ipc_command_rx) = spawn_socket_watcher(listener) else {
-                tracing::debug!("Secondary instance, quitting");
+            let break_service = BreakService::start(run_on_startup, cx);
+
+            let Some(ipc_service) = IpcService::start_with_listener(listener, args.command, cx)
+            else {
+                tracing::debug!("Secondary");
                 cx.quit();
                 return;
             };
 
-            let (event_sender, event_reader) = tokio::sync::mpsc::unbounded_channel();
+            let tray_service = TrayService::start(run_on_startup, cx);
 
-            let runner = BreakScheduler::new(run_on_startup, tray_sender);
-            start_break_scheduler(runner, cx, event_reader).detach();
+            tray_service.update(cx, |_, cx| {
+                cx.subscribe(&break_service, |tray_service, _, tray_messages, _| {
+                    tray_service.handle_messages(tray_messages.clone())
+                })
+                .detach();
+            });
 
-            let event_sender_clone = event_sender.clone();
-            cx.spawn(async move |cx| {
-                if let Some(command) = args.command
-                    && let Err(err) = command.handle(cx, &event_sender_clone)
-                {
-                    tracing::debug!("Error handling initial CLI command: {err}")
-                }
+            break_service.update(cx, |_, cx| {
+                cx.subscribe(&ipc_service, |break_service, _, command, _| {
+                    let CliCommand::BreakServiceCommand(break_service_command) = command else {
+                        return;
+                    };
+                    break_service.handle_command(*break_service_command);
+                })
+                .detach();
 
-                while let Some(ipc_command) = ipc_command_rx.recv().await {
-                    tracing::debug!("Got IPC command: {ipc_command:?}");
-                    if ipc_command.handle(cx, &event_sender_clone).is_err() {
-                        tracing::debug!("Event channel disconnected, ending IPC service.");
-                        break;
-                    }
-                }
-            })
-            .detach();
+                cx.subscribe(&tray_service, |break_service, _, command, _| {
+                    let CliCommand::BreakServiceCommand(break_service_command) = command else {
+                        return;
+                    };
+                    break_service.handle_command(*break_service_command);
+                })
+                .detach();
+            });
 
-            let event_sender_clone = event_sender.clone();
-            cx.on_window_closed(move |_, window_id| {
-                _ = event_sender_clone.send(breaks::SchedulerEvent::WindowClosed(window_id));
-            })
-            .detach();
-
-            cx.spawn(async move |cx| {
-                while let Some(tray_command) = tray_receiver.recv().await {
-                    tracing::debug!("Got tray command: {tray_command:?}");
-                    if tray_command.handle(cx, &event_sender).is_err() {
-                        tracing::debug!("Event channel disconnected, ending tray service.");
-                        break;
-                    }
-                }
-            })
-            .detach();
+            cx.set_global(Talo {
+                _break_service: break_service,
+                _ipc_service: ipc_service,
+                _tray_service: tray_service,
+            });
         });
 }
