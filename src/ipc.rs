@@ -84,7 +84,7 @@ pub fn claim_or_forward(socket_path: PathBuf, command: Option<CliCommand>) -> io
 pub fn spawn_socket_watcher(
     listener: LocalSocketListener,
     initial_command: Option<CliCommand>,
-) -> Option<UnboundedReceiver<CliCommand>> {
+) -> UnboundedReceiver<CliCommand> {
     let (ipc_command_tx, ipc_command_rx) = tokio::sync::mpsc::unbounded_channel();
 
     if let Some(initial_command) = initial_command {
@@ -122,7 +122,7 @@ pub fn spawn_socket_watcher(
         }
     });
 
-    Some(ipc_command_rx)
+    ipc_command_rx
 }
 
 pub struct IpcService {
@@ -136,8 +136,8 @@ impl IpcService {
         listener: LocalSocketListener,
         initial_command: Option<CliCommand>,
         cx: &mut App,
-    ) -> Option<Entity<Self>> {
-        let mut ipc_command_rx = spawn_socket_watcher(listener, initial_command)?;
+    ) -> Entity<Self> {
+        let mut ipc_command_rx = spawn_socket_watcher(listener, initial_command);
 
         let ipc_service = cx.new(|cx| {
             let task = cx.spawn(async move |ipc_service, cx| {
@@ -158,6 +158,6 @@ impl IpcService {
 
             Self { _task: task }
         });
-        Some(ipc_service)
+        ipc_service
     }
 }

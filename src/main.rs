@@ -108,12 +108,7 @@ fn main() {
 
             let break_service = BreakService::start(run_on_startup, cx);
 
-            let Some(ipc_service) = IpcService::start_with_listener(listener, args.command, cx)
-            else {
-                tracing::debug!("Secondary");
-                cx.quit();
-                return;
-            };
+            let ipc_service = IpcService::start_with_listener(listener, args.command, cx);
 
             let tray_service = TrayService::start(run_on_startup, cx);
 
