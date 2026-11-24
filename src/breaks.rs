@@ -1,22 +1,15 @@
-use std::{
-    sync::mpsc::Sender,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use chrono::NaiveTime;
 use clap::ValueEnum;
 
 use gpui_component::{Sizable, StyledExt, button::ButtonVariants};
 use gpui_kit::{
-    Animation, AnimationExt, App, AsyncApp, Context, Entity, EventEmitter, Global, Task,
-    TitlebarOptions, Window, WindowHandle, WindowId, WindowOptions, component::button::Button, div,
+    Animation, AnimationExt, App, AsyncApp, Context, Entity, EventEmitter, Task, TitlebarOptions,
+    Window, WindowHandle, WindowId, WindowOptions, component::button::Button, div,
     layer_shell::LayerShellOptions, prelude::*, px, relative, rems, rgb,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::{
-    Notify,
-    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
-};
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::{
     BreakServiceCommand,

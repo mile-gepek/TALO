@@ -7,7 +7,7 @@ use tracing_subscriber::EnvFilter;
 
 use crate::{
     breaks::BreakType,
-    ipc::{IpcRole, claim_or_forward, default_socket_path, spawn_socket_watcher},
+    ipc::{IpcRole, claim_or_forward, default_socket_path},
 };
 
 mod breaks;
