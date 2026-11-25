@@ -1,13 +1,18 @@
-use crate::{breaks::BreakService, ipc::IpcService, settings::SettingsGlobal, tray::TrayService};
 use clap::{Parser, Subcommand};
 
-use gpui_kit::{App, AppContext, Context, Entity, Global, application, assets::Assets, hsla, px};
+use gpui_kit::{
+    App, AppContext, BorrowAppContext, Context, Entity, Global, application, assets::Assets, hsla,
+    px,
+};
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    breaks::BreakType,
-    ipc::{IpcRole, claim_or_forward, default_socket_path},
+    breaks::{BreakService, BreakType},
+    config::{ConfigService, load_config_or_default},
+    ipc::{IpcRole, IpcService, claim_or_forward, default_socket_path},
+    settings::SettingsGlobal,
+    tray::TrayService,
 };
 
 mod breaks;
@@ -68,6 +73,7 @@ struct TaloInner {
     break_service: Entity<BreakService>,
     _ipc_service: Entity<IpcService>,
     _tray_service: Entity<TrayService>,
+    config_service: Entity<ConfigService>,
 }
 
 impl TaloInner {
@@ -78,7 +84,12 @@ impl TaloInner {
                 .break_service
                 .read(cx)
                 .handle_command(break_service_command),
-            _ => {}
+            CliCommand::Settings => {
+                cx.update_global::<SettingsGlobal, _>(|settings_global, cx| {
+                    settings_global.open_or_focus(cx, &self.config_service.downgrade())
+                });
+            }
+            command => todo!("Implement {command:?} handling"),
         }
     }
 }
@@ -106,6 +117,8 @@ fn main() {
         return;
     };
 
+    let config = load_config_or_default();
+
     application()
         .with_quit_mode(gpui_kit::QuitMode::Explicit)
         .with_assets(Assets)
@@ -123,11 +136,23 @@ fn main() {
             let settings_global = SettingsGlobal::new();
             cx.set_global(settings_global);
 
-            let break_service = BreakService::start(run_on_startup, cx);
-
+            let break_service = BreakService::start(run_on_startup, config.breaks, cx);
             let ipc_service = IpcService::start_with_listener(listener, args.command, cx);
-
             let tray_service = TrayService::start(run_on_startup, cx);
+            let config_service = cx.new(|_| ConfigService);
+
+            break_service.update(cx, |_, cx| {
+                cx.subscribe(
+                    &config_service,
+                    |break_service, _, config_event, _| match config_event {
+                        config::ConfigEvent::Changed(new_config) => {
+                            let break_config = new_config.breaks;
+                            break_service.change_config(break_config);
+                        }
+                    },
+                )
+                .detach();
+            });
 
             tray_service.update(cx, |_, cx| {
                 cx.subscribe(&break_service, |tray_service, _, tray_messages, _| {
@@ -159,6 +184,7 @@ fn main() {
                     break_service,
                     _ipc_service: ipc_service,
                     _tray_service: tray_service,
+                    config_service,
                 }
             });
 

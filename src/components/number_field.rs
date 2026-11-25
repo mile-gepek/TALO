@@ -14,7 +14,7 @@ impl<T: Display + FromStr + 'static> InputField<T> {
         initial_value: T,
         window: &mut Window,
         cx: &mut Context<V>,
-        on_change: fn(&mut V, &T, Entity<InputState>, &mut Context<V>),
+        on_change: impl Fn(&mut V, &T, Entity<InputState>, &mut Context<V>) + 'static,
     ) -> Self
     where
         <T as FromStr>::Err: std::fmt::Debug,

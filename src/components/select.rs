@@ -16,12 +16,12 @@ impl<D: SearchableListDelegate> SelectInput<D> {
         selected_index: Option<IndexPath>,
         window: &mut Window,
         cx: &mut Context<V>,
-        on_change: fn(
+        on_change: impl Fn(
             &mut V,
             &Option<<D::Item as SearchableListItem>::Value>,
             Entity<SelectState<D>>,
             &mut Context<V>,
-        ),
+        ) + 'static,
     ) -> Self {
         let state = cx.new(|cx| SelectState::new(items, selected_index, window, cx));
 

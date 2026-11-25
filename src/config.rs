@@ -6,6 +6,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
+use gpui_kit::{Context, EventEmitter};
 use thiserror::Error;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -159,7 +160,7 @@ impl Config {
     }
 }
 
-pub fn update(mutate: impl FnOnce(&mut Config)) -> Result<Config, ConfigError> {
+fn update(mutate: impl FnOnce(&mut Config)) -> Result<Arc<Config>, ConfigError> {
     let current = *CONFIG.load_full();
     let mut next = current;
     mutate(&mut next);
@@ -169,17 +170,39 @@ pub fn update(mutate: impl FnOnce(&mut Config)) -> Result<Config, ConfigError> {
         CONFIG.store(Arc::new(next));
     }
 
-    tracing::debug!("Saving new config: {next:?}");
-
-    Ok(next)
+    let loaded = CONFIG.load().clone();
+    Ok(loaded)
 }
 
-pub static CONFIG: LazyLock<ArcSwap<Config>> = LazyLock::new(|| {
+static CONFIG: LazyLock<ArcSwap<Config>> = LazyLock::new(|| {
     let config = Config::read()
         .inspect_err(|err| tracing::error!("Error loading config: '{err}'\nUsing default config"))
         .unwrap_or_default();
     ArcSwap::from_pointee(config)
 });
+
+pub fn load_config_or_default() -> Config {
+    *CONFIG.load_full()
+}
+
+pub enum ConfigEvent {
+    /// Emitted when the settings UI changes a field.
+    Changed(Arc<Config>),
+}
+
+pub struct ConfigService;
+
+impl EventEmitter<ConfigEvent> for ConfigService {}
+
+impl ConfigService {
+    pub fn update_config(
+        &self,
+        mutate: impl FnOnce(&mut Config),
+        cx: &mut Context<Self>,
+    ) -> Result<Arc<Config>, ConfigError> {
+        update(mutate).inspect(|config| cx.emit(ConfigEvent::Changed(config.clone())))
+    }
+}
 
 #[cfg(test)]
 mod tests {

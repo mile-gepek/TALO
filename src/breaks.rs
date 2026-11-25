@@ -4,8 +4,8 @@ use clap::ValueEnum;
 
 use gpui_component::{Sizable, StyledExt, button::ButtonVariants};
 use gpui_kit::{
-    Animation, AnimationExt, App, AsyncApp, Context, Entity, EventEmitter, Task, TitlebarOptions,
-    Window, WindowHandle, WindowId, WindowOptions, component::button::Button, div,
+    Animation, AnimationExt, App, AsyncApp, Context, Entity, EventEmitter, SharedString, Task,
+    TitlebarOptions, Window, WindowHandle, WindowId, WindowOptions, component::button::Button, div,
     layer_shell::LayerShellOptions, prelude::*, px, relative, rems, rgb,
 };
 use serde::{Deserialize, Serialize};
@@ -13,19 +13,20 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use crate::{
     BreakServiceCommand,
-    config::{AfterResumeBehavior, BreakConfig, CONFIG, Config},
+    config::{AfterResumeBehavior, BreakConfig},
     tray::TrayMessage,
 };
 
 struct BreakView {
     started_at: Instant,
-    break_type: BreakType,
+    break_duration: Option<Duration>,
+    break_text: SharedString,
     /// A task for the break to tick the shown timer and progress bar
     _ticker: Task<()>,
 }
 
 impl BreakView {
-    pub fn new(cx: &mut Context<Self>, break_type: BreakType) -> Self {
+    pub fn new(cx: &mut Context<Self>, break_type: BreakType, config: &BreakConfig) -> Self {
         let handle = cx.spawn(async move |this, cx| {
             loop {
                 // break screen timer ticks every second, progress bar uses an Animation.
@@ -36,9 +37,12 @@ impl BreakView {
                 .ok();
             }
         });
+        let break_duration = break_type.duration(config);
+        let break_text = break_type.text().into();
         BreakView {
             started_at: Instant::now(),
-            break_type,
+            break_duration,
+            break_text,
             _ticker: handle,
         }
     }
@@ -46,17 +50,12 @@ impl BreakView {
 
 impl Render for BreakView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let break_text = self.break_type.text();
         let break_text = div()
-            .child(break_text)
+            .child(self.break_text.clone())
             .text_size(rems(2.5))
             .font_bold()
             .font_family("Liberation Sans");
-        let button_label = if matches!(self.break_type, BreakType::Infinite) {
-            "End break"
-        } else {
-            "Skip break"
-        };
+        let button_label = self.break_duration.map_or("End break", |_| "Skip break");
         let button = Button::new("skip-button")
             .px(px(18.))
             .py_2p5()
@@ -83,8 +82,8 @@ impl Render for BreakView {
             .items_center()
             .child(break_text);
 
-        if !matches!(self.break_type, BreakType::Infinite) {
-            let end_at = self.started_at + self.break_type.duration();
+        if let Some(break_duration) = self.break_duration {
+            let end_at = self.started_at + break_duration;
             let time_remaining = end_at.duration_since(Instant::now());
             let seconds_remaining = time_remaining.as_secs_f32();
             let minutes = (seconds_remaining.ceil() / 60.).round();
@@ -92,7 +91,7 @@ impl Render for BreakView {
             let time_remaining_text = div()
                 .text_size(rems(1.2))
                 .child(format!("{minutes:02}:{seconds:02}"));
-            let progress_bar_animation = Animation::new(self.break_type.duration());
+            let progress_bar_animation = Animation::new(break_duration);
             let progress_bar = div()
                 .w_full()
                 .h(rems(0.8))
@@ -144,11 +143,11 @@ pub enum BreakType {
 }
 
 impl BreakType {
-    fn duration(&self) -> Duration {
+    fn duration(&self, config: &BreakConfig) -> Option<Duration> {
         match self {
-            BreakType::Short => Duration::from_secs(5),
-            BreakType::Long => Duration::from_secs(15),
-            BreakType::Infinite => Duration::MAX,
+            BreakType::Short => Some(config.short_break_duration),
+            BreakType::Long => Some(config.long_break_duration),
+            BreakType::Infinite => None,
         }
     }
 
@@ -206,7 +205,7 @@ impl RunningBreak {
             .update(cx, |_, window, _| window.remove_window());
     }
 
-    fn open(cx: &mut AsyncApp, break_type: BreakType) -> RunningBreak {
+    fn open(cx: &mut AsyncApp, break_type: BreakType, config: &BreakConfig) -> RunningBreak {
         tracing::debug!("Running break");
         let window_options = WindowOptions {
             focus: true,
@@ -227,17 +226,17 @@ impl RunningBreak {
         };
         let window_handle = cx
             .open_window(window_options, |_, cx| {
-                cx.new(|cx| BreakView::new(cx, break_type))
+                cx.new(|cx| BreakView::new(cx, break_type, config))
             })
             .unwrap();
 
-        let close_task = if matches!(break_type, BreakType::Infinite) {
-            None
-        } else {
+        let close_task = if let Some(break_duration) = break_type.duration(config) {
             Some(cx.spawn(async move |cx| {
-                cx.background_executor().timer(break_type.duration()).await;
+                cx.background_executor().timer(break_duration).await;
                 _ = window_handle.update(cx, |_, window, _| window.remove_window());
             }))
+        } else {
+            None
         };
         Self {
             window_handle,
@@ -284,7 +283,7 @@ impl ActiveState {
 #[derive(Debug)]
 enum BreakServiceEvent {
     Command(BreakServiceCommand),
-    ReloadConfig,
+    ConfigChange(BreakConfig),
     WindowClosed(WindowId),
 }
 
@@ -303,8 +302,7 @@ struct BreakServiceState {
 }
 
 impl BreakServiceState {
-    pub fn new(run_on_startup: bool) -> Self {
-        let config = CONFIG.load().breaks;
+    pub fn new(run_on_startup: bool, config: BreakConfig) -> Self {
         Self {
             short_breaks_run: 0,
             break_state: None,
@@ -313,7 +311,7 @@ impl BreakServiceState {
         }
     }
 
-    fn handle(&mut self, event: &BreakServiceEvent) -> Option<Effect> {
+    fn handle(&mut self, event: BreakServiceEvent) -> Option<Effect> {
         match event {
             BreakServiceEvent::Command(command) => match command {
                 BreakServiceCommand::Pause => {
@@ -321,16 +319,16 @@ impl BreakServiceState {
                 }
                 BreakServiceCommand::Resume => return Some(Effect::TrayMessage(self.resume())),
                 BreakServiceCommand::RunBreak { break_type } => {
-                    return Some(Effect::OpenBreak(*break_type));
+                    return Some(Effect::OpenBreak(break_type));
                 }
             },
             BreakServiceEvent::WindowClosed(window_id) => {
                 return self
-                    .on_window_close(window_id)
+                    .on_window_close(&window_id)
                     .map(|tray_message| Effect::TrayMessage(vec![tray_message]));
             }
-            BreakServiceEvent::ReloadConfig => {
-                self.reload_config();
+            BreakServiceEvent::ConfigChange(config) => {
+                self.change_config(config);
             }
         }
         None
@@ -416,7 +414,7 @@ impl BreakServiceState {
         if let Some(BreakKind::Running(running_break)) = &self.break_state {
             running_break.close(cx);
         }
-        let running_break = RunningBreak::open(cx, break_type);
+        let running_break = RunningBreak::open(cx, break_type, &self.config);
         self.break_state = Some(BreakKind::Running(running_break));
     }
 
@@ -429,14 +427,9 @@ impl BreakServiceState {
         self.open_break(cx, scheduled_break.break_type);
     }
 
-    fn reload_config(&mut self) {
-        match Config::reload() {
-            Ok(config) => {
-                self.config = config.breaks;
-                // TODO: diff the configs and reschedule if needed.
-            }
-            Err(err) => tracing::error!("Error reloading config: '{err}'"),
-        }
+    fn change_config(&mut self, config: BreakConfig) {
+        tracing::debug!("Updating config for break service");
+        self.config = config
     }
 }
 
@@ -448,12 +441,12 @@ pub struct BreakService {
 impl EventEmitter<Vec<TrayMessage>> for BreakService {}
 
 impl BreakService {
-    pub fn start(run_on_startup: bool, cx: &mut App) -> Entity<Self> {
+    pub fn start(run_on_startup: bool, config: BreakConfig, cx: &mut App) -> Entity<Self> {
         let (event_sender, mut event_reader) = unbounded_channel();
 
         cx.new(|cx| {
             let task = cx.spawn(async move |service, cx| {
-                let mut scheduler = BreakServiceState::new(run_on_startup);
+                let mut scheduler = BreakServiceState::new(run_on_startup, config);
                 let tray_message = if run_on_startup {
                     scheduler
                         .schedule_new()
@@ -488,18 +481,16 @@ impl BreakService {
                         _ => event_reader.recv().await,
                     };
                     let Some(event) = event else { return };
-                    if let Some(effect) = scheduler.handle(&event) {
+                    if let Some(effect) = scheduler.handle(event) {
                         match effect {
                             Effect::OpenBreak(break_type) => scheduler.open_break(cx, break_type),
                             Effect::TrayMessage(tray_messages) => {
                                 if !tray_messages.is_empty()
-                                    && service.update(cx, |_, cx| cx.emit(tray_messages)).is_err() {
-                                        tracing::warn!(
-                                            "Break service entity dropped, but task wasn't"
-                                        );
-                                        return;
-                                    };
-                                }
+                                    && service.update(cx, |_, cx| cx.emit(tray_messages)).is_err()
+                                {
+                                    tracing::warn!("Break service entity dropped, but task wasn't");
+                                    return;
+                                };
                             }
                         }
                     }
@@ -521,5 +512,10 @@ impl BreakService {
     pub fn on_window_closed(&self, window_id: WindowId) {
         let event = BreakServiceEvent::WindowClosed(window_id);
         _ = self.event_sender.send(event)
+    }
+
+    pub fn change_config(&self, config: BreakConfig) {
+        let event = BreakServiceEvent::ConfigChange(config);
+        _ = self.event_sender.send(event);
     }
 }

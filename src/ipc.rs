@@ -10,6 +10,9 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use crate::CliCommand;
 
 pub static APP_NAME: &str = "talo";
+#[cfg(debug_assertions)]
+pub const SOCKET_NAME: &str = concat!("talo-", env!("CARGO_PKG_VERSION"), "-debug", ".sock");
+#[cfg(not(debug_assertions))]
 pub const SOCKET_NAME: &str = concat!("talo-", env!("CARGO_PKG_VERSION"), ".sock");
 
 pub enum IpcRole {
