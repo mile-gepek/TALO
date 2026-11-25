@@ -492,8 +492,8 @@ impl BreakService {
                         match effect {
                             Effect::OpenBreak(break_type) => scheduler.open_break(cx, break_type),
                             Effect::TrayMessage(tray_messages) => {
-                                if !tray_messages.is_empty() {
-                                    if service.update(cx, |_, cx| cx.emit(tray_messages)).is_err() {
+                                if !tray_messages.is_empty()
+                                    && service.update(cx, |_, cx| cx.emit(tray_messages)).is_err() {
                                         tracing::warn!(
                                             "Break service entity dropped, but task wasn't"
                                         );

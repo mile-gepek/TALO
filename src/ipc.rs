@@ -139,7 +139,8 @@ impl IpcService {
     ) -> Entity<Self> {
         let mut ipc_command_rx = spawn_socket_watcher(listener, initial_command);
 
-        let ipc_service = cx.new(|cx| {
+        
+        cx.new(|cx| {
             let task = cx.spawn(async move |ipc_service, cx| {
                 while let Some(ipc_command) = ipc_command_rx.recv().await {
                     tracing::debug!("Got IPC command: {ipc_command:?}");
@@ -157,7 +158,6 @@ impl IpcService {
             });
 
             Self { _task: task }
-        });
-        ipc_service
+        })
     }
 }

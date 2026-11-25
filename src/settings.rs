@@ -96,7 +96,7 @@ fn min_after_resume_row(
         if enabled { 1. } else { 0.5 },
         Transition::new(duration).easing(easing.clone()),
         window,
-        &mut cx,
+        cx,
     );
 
     let min_after_resume = row(
@@ -315,17 +315,17 @@ impl SettingsView {
             vec![
                 row(
                     label_with_hint(cx, "Short break duration", "In seconds"),
-                    number_input(&self.short_break_duration.state(), true),
+                    number_input(self.short_break_duration.state(), true),
                 )
                 .into_any_element(),
                 row(
                     label_with_hint(cx, "Interval between short breaks", "In minutes"),
-                    number_input(&self.short_break_interval.state(), true),
+                    number_input(self.short_break_interval.state(), true),
                 )
                 .into_any_element(),
                 row(
                     label_with_hint(cx, "Long break duration", "In seconds"),
-                    number_input(&self.long_break_duration.state(), true),
+                    number_input(self.long_break_duration.state(), true),
                 )
                 .into_any_element(),
                 row(
@@ -334,7 +334,7 @@ impl SettingsView {
                         "Interval between long breaks",
                         "Number of short breaks before a long break",
                     ),
-                    number_input(&self.long_break_interval.state(), true),
+                    number_input(self.long_break_interval.state(), true),
                 )
                 .into_any_element(),
             ],
@@ -348,10 +348,10 @@ impl SettingsView {
                     "Behavior after resuming",
                     div()
                         .w(rems(12.))
-                        .child(Select::new(&self.after_resume.state()).with_size(Size::Medium)),
+                        .child(Select::new(self.after_resume.state()).with_size(Size::Medium)),
                 )
                 .into_any_element(),
-                min_after_resume_row(self, keep_time_remaining, window, &mut cx),
+                min_after_resume_row(self, keep_time_remaining, window, cx),
             ],
             cx,
         );
