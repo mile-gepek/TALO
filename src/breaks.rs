@@ -260,13 +260,6 @@ impl BreakKind {
             _ => false,
         }
     }
-
-    fn into_running(self) -> Option<RunningBreak> {
-        match self {
-            Self::Running(running_break) => Some(running_break),
-            _ => None,
-        }
-    }
 }
 
 enum ActiveState {
