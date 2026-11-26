@@ -110,14 +110,6 @@ fn min_after_resume_row(
         .into_any_element()
 }
 
-fn number_input_state(
-    window: &mut Window,
-    cx: &mut Context<SettingsView>,
-    step: f64,
-) -> Entity<InputState> {
-    cx.new(|cx| InputState::new(window, cx).placeholder("0").step(step))
-}
-
 fn focus_guard(element: impl IntoElement) -> Div {
     div()
         .on_mouse_down_out(|_, window, cx| window.blur(cx))
