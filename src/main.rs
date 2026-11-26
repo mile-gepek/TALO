@@ -86,7 +86,7 @@ impl TaloInner {
                 .handle_command(break_service_command),
             CliCommand::Settings => {
                 cx.update_global::<SettingsGlobal, _>(|settings_global, cx| {
-                    settings_global.open_or_focus(cx, &self.config_service.downgrade())
+                    settings_global.open_or_focus(cx, self.config_service.downgrade())
                 });
             }
             command => todo!("Implement {command:?} handling"),

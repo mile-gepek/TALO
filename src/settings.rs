@@ -52,7 +52,7 @@ impl SettingsGlobal {
             window_handle: None,
         }
     }
-    pub(crate) fn open_or_focus(&mut self, cx: &mut App, config_weak: &WeakEntity<ConfigService>) {
+    pub(crate) fn open_or_focus(&mut self, cx: &mut App, config_weak: WeakEntity<ConfigService>) {
         let open_new = match self.window_handle {
             Some(handle) => handle
                 .update(cx, |_, window, _| window.activate_window())
@@ -64,7 +64,7 @@ impl SettingsGlobal {
         }
     }
 
-    fn open(&mut self, cx: &mut App, config_service_weak: &WeakEntity<ConfigService>) {
+    fn open(&mut self, cx: &mut App, config_service_weak: WeakEntity<ConfigService>) {
         let window_options = WindowOptions {
             app_id: Some("talo".to_string()),
             titlebar: Some(TitlebarOptions {
@@ -207,6 +207,7 @@ fn label_with_hint(cx: &App, label: impl IntoElement, hint: impl IntoElement) ->
 }
 
 struct SettingsView {
+    config_service_weak: WeakEntity<ConfigService>,
     short_break_duration: InputField<f32>,
     short_break_interval: InputField<f32>,
     long_break_duration: InputField<f32>,
@@ -215,69 +216,58 @@ struct SettingsView {
     min_after_resume: InputField<f32>,
 }
 
-fn update_config(
-    config_weak: &WeakEntity<ConfigService>,
-    cx: &mut App,
-    mutate: impl FnOnce(&mut Config),
-) {
-    _ = config_weak.update(cx, |config_service, cx| {
-        config_service.update_config(mutate, cx)
-    });
-}
-
 impl SettingsView {
+    fn update_config(&self, cx: &mut App, mutate: impl FnOnce(&mut Config)) {
+        _ = self.config_service_weak.update(cx, |config_service, cx| {
+            config_service.update_config(mutate, cx)
+        });
+    }
+
     fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
         initial_config: Config,
-        config_service_weak: &WeakEntity<ConfigService>,
+        config_service_weak: WeakEntity<ConfigService>,
     ) -> Self {
-        let config_weak_clone = config_service_weak.clone();
         let short_break_duration = InputField::new(
             initial_config.breaks.short_break_duration.as_secs_f32(),
             window,
             cx,
-            move |_, seconds, _, cx| {
-                update_config(&config_weak_clone, cx, |config| {
+            move |settings_view, seconds, _, cx| {
+                settings_view.update_config(cx, |config| {
                     config.breaks.short_break_duration = Duration::from_secs_f32(*seconds)
                 });
             },
         );
-        let config_weak_clone = config_service_weak.clone();
         let short_break_interval = InputField::new(
             initial_config.breaks.short_break_interval.as_secs_f32() / 60.,
             window,
             cx,
-            move |_, minutes, _, cx| {
-                update_config(&config_weak_clone, cx, |config| {
+            move |settings_view, minutes, _, cx| {
+                settings_view.update_config(cx, |config| {
                     config.breaks.short_break_interval = Duration::from_secs_f32(minutes * 60.)
                 });
             },
         );
-        let config_weak_clone = config_service_weak.clone();
         let long_break_duration = InputField::new(
             initial_config.breaks.long_break_duration.as_secs_f32(),
             window,
             cx,
-            move |_, seconds, _, cx| {
-                update_config(&config_weak_clone, cx, |config| {
+            move |settings_view, seconds, _, cx| {
+                settings_view.update_config(cx, |config| {
                     config.breaks.long_break_duration = Duration::from_secs_f32(*seconds)
                 })
             },
         );
-        let config_weak_clone = config_service_weak.clone();
         let long_break_interval = InputField::new(
             initial_config.breaks.long_break_interval,
             window,
             cx,
-            move |_, count, _, cx| {
-                update_config(&config_weak_clone, cx, |config| {
-                    config.breaks.long_break_interval = *count
-                })
+            move |settings_view, count, _, cx| {
+                settings_view.update_config(cx, |config| config.breaks.long_break_interval = *count)
             },
         );
 
-        let config_weak_clone = config_service_weak.clone();
         let after_resume = SelectInput::new(
             vec![
                 AfterResumeBehavior::KeepScheduledBreak,
@@ -286,8 +276,8 @@ impl SettingsView {
             Some(IndexPath::new(0)),
             window,
             cx,
-            move |_, behavior, _, cx| {
-                update_config(&config_weak_clone, cx, |config| {
+            move |settings_view, behavior, _, cx| {
+                settings_view.update_config(cx, |config| {
                     let Some(behavior) = behavior else {
                         return;
                     };
@@ -296,7 +286,6 @@ impl SettingsView {
             },
         );
 
-        let config_weak_clone = config_service_weak.clone();
         let min_after_resume = InputField::new(
             initial_config
                 .breaks
@@ -305,8 +294,8 @@ impl SettingsView {
                 .as_secs_f32(),
             window,
             cx,
-            move |_, seconds, _, cx| {
-                update_config(&config_weak_clone, cx, |config| {
+            move |settings_view, seconds, _, cx| {
+                settings_view.update_config(cx, |config| {
                     config.breaks.after_resume_config.min_wait_after_resume =
                         Duration::from_secs_f32(*seconds)
                 })
@@ -320,6 +309,7 @@ impl SettingsView {
             long_break_interval,
             after_resume,
             min_after_resume,
+            config_service_weak: config_service_weak,
         }
     }
 
