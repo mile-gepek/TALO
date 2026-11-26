@@ -1,4 +1,8 @@
-use std::{fmt::Display, marker::PhantomData, str::FromStr};
+use std::{
+    fmt::{Debug, Display},
+    marker::PhantomData,
+    str::FromStr,
+};
 
 use gpui_component::input::{InputEvent, InputState};
 use gpui_kit::{AppContext, Context, Entity, Subscription, Window};
@@ -9,7 +13,7 @@ pub struct InputField<T> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: Display + FromStr + 'static + std::fmt::Debug> InputField<T> {
+impl<T: Display + FromStr + 'static + Debug> InputField<T> {
     pub fn new<V: 'static>(
         initial_value: T,
         window: &mut Window,
@@ -17,7 +21,7 @@ impl<T: Display + FromStr + 'static + std::fmt::Debug> InputField<T> {
         on_change: impl Fn(&mut V, &T, Entity<InputState>, &mut Context<V>) + 'static,
     ) -> Self
     where
-        <T as FromStr>::Err: std::fmt::Debug,
+        <T as FromStr>::Err: Debug,
     {
         let state = cx.new(|cx| {
             InputState::new(window, cx)
