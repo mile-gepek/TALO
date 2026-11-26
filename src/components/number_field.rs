@@ -9,7 +9,7 @@ pub struct InputField<T> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: Display + FromStr + 'static> InputField<T> {
+impl<T: Display + FromStr + 'static + std::fmt::Debug> InputField<T> {
     pub fn new<V: 'static>(
         initial_value: T,
         window: &mut Window,
@@ -26,7 +26,15 @@ impl<T: Display + FromStr + 'static> InputField<T> {
                 .default_value(initial_value.to_string())
         });
         let subscription = cx.subscribe(&state, move |this, state, event, cx| {
-            let value = state.read(cx).value().parse().unwrap();
+            let value = match state.read(cx).value().parse() {
+                Ok(value) => value,
+                err => {
+                    tracing::warn!(
+                        "InputField input could not be converted to required type: {err:?}"
+                    );
+                    return;
+                }
+            };
             match event {
                 InputEvent::Change | InputEvent::PressEnter { .. } => {
                     on_change(this, &value, state, cx);
