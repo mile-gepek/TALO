@@ -15,6 +15,7 @@ use gpui_kit::{
     base::{Transition, transition},
     div, px, rems,
 };
+use regex::Regex;
 
 use crate::{
     components::InputField,
@@ -221,8 +222,11 @@ impl SettingsView {
         initial_config: Config,
         config_service_weak: WeakEntity<ConfigService>,
     ) -> Self {
+        let float_validator = |val: f32| val > 0.;
+
         let short_break_duration = InputField::new(
             initial_config.breaks.short_break_duration.as_secs_f32(),
+            float_validator,
             window,
             cx,
             move |settings_view, seconds, _, cx| {
@@ -233,6 +237,7 @@ impl SettingsView {
         );
         let short_break_interval = InputField::new(
             initial_config.breaks.short_break_interval.as_secs_f32() / 60.,
+            float_validator,
             window,
             cx,
             move |settings_view, minutes, _, cx| {
@@ -242,17 +247,19 @@ impl SettingsView {
             },
         );
         let long_break_duration = InputField::new(
-            initial_config.breaks.long_break_duration.as_secs_f32(),
+            initial_config.breaks.long_break_duration.as_secs_f32() / 60.,
+            float_validator,
             window,
             cx,
-            move |settings_view, seconds, _, cx| {
+            move |settings_view, minutes, _, cx| {
                 settings_view.update_config(cx, |config| {
-                    config.breaks.long_break_duration = Duration::from_secs_f32(*seconds)
+                    config.breaks.long_break_duration = Duration::from_secs_f32(minutes * 60.)
                 })
             },
         );
         let long_break_interval = InputField::new(
             initial_config.breaks.long_break_interval,
+            |value| value > 0,
             window,
             cx,
             move |settings_view, count, _, cx| {
@@ -284,6 +291,7 @@ impl SettingsView {
                 .after_resume_config
                 .min_wait_after_resume
                 .as_secs_f32(),
+            float_validator,
             window,
             cx,
             move |settings_view, seconds, _, cx| {

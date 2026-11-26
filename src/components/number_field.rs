@@ -5,7 +5,8 @@ use std::{
 };
 
 use gpui_component::input::{InputEvent, InputState};
-use gpui_kit::{AppContext, Context, Entity, Subscription, Window};
+use gpui_kit::{App, AppContext, Context, Entity, Subscription, Window};
+use regex::Regex;
 
 pub struct InputField<T> {
     input_state: Entity<InputState>,
@@ -16,6 +17,7 @@ pub struct InputField<T> {
 impl<T: Display + FromStr + 'static + Debug> InputField<T> {
     pub fn new<V: 'static>(
         initial_value: T,
+        validator: impl Fn(T) -> bool + 'static,
         window: &mut Window,
         cx: &mut Context<V>,
         on_change: impl Fn(&mut V, &T, Entity<InputState>, &mut Context<V>) + 'static,
@@ -23,9 +25,13 @@ impl<T: Display + FromStr + 'static + Debug> InputField<T> {
     where
         <T as FromStr>::Err: Debug,
     {
+        let validator =
+            move |val: &str, _: &mut App| T::from_str(val).is_ok_and(|num| validator(num));
+
         let state = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("0")
+                .validate(validator)
                 .step(1.)
                 .default_value(initial_value.to_string())
         });
