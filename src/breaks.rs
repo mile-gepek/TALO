@@ -428,7 +428,6 @@ impl BreakServiceState {
     }
 
     fn change_config(&mut self, config: BreakConfig) {
-        tracing::debug!("Updating config for break service");
         self.config = config
     }
 }
