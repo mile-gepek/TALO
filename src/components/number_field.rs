@@ -6,7 +6,6 @@ use std::{
 
 use gpui_component::input::{InputEvent, InputState};
 use gpui_kit::{App, AppContext, Context, Entity, Subscription, Window};
-use regex::Regex;
 
 pub struct InputField<T> {
     input_state: Entity<InputState>,
