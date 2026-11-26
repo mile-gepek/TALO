@@ -86,7 +86,7 @@ impl Render for BreakView {
             let end_at = self.started_at + break_duration;
             let time_remaining = end_at.duration_since(Instant::now());
             let seconds_remaining = time_remaining.as_secs_f32();
-            let minutes = (seconds_remaining.ceil() / 60.).round();
+            let minutes = (seconds_remaining.ceil() / 60.).floor();
             let seconds = (seconds_remaining.ceil() % 60.).round();
             let time_remaining_text = div()
                 .text_size(rems(1.2))
