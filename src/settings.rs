@@ -316,12 +316,17 @@ impl SettingsView {
     }
 
     fn about_section(&self, cx: &App) -> AnyElement {
-        let version = row(
-            "Version 0.1.0",
-            Icon::empty()
-                .path("icons/github.svg")
-                .text_color(cx.theme().muted_foreground),
-        );
+        let github_repo = Link::new("github-link")
+            .child(
+                Icon::empty()
+                    .m_3()
+                    .path("icons/github.svg")
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .on_click(|_, _, cx| {
+                cx.open_url("https://github.com/mile-gepek/talo");
+            });
+        let version = row("Version 0.1.0", github_repo);
 
         section(Some("About"), vec![version.into_any_element()], cx).into_any_element()
     }
