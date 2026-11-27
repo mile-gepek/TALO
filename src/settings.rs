@@ -16,7 +16,6 @@ use gpui_kit::{
     base::{Transition, transition},
     div, px, rems,
 };
-use regex::Regex;
 
 use crate::{
     components::InputField,
