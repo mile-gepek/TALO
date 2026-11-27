@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IndexPath, Sizable, Size, StyledExt, h_flex,
-    input::{InputState, NumberInput},
+    ActiveTheme, Icon, IndexPath, Sizable, Size, StyledExt, h_flex,
+    input::{Input, InputState},
+    link::Link,
     scroll::ScrollableElement,
     searchable_list::SearchableListItem,
     select::Select,
@@ -119,9 +120,10 @@ fn focus_guard(element: impl IntoElement) -> Div {
 
 fn number_input(state: &Entity<InputState>, enabled: bool) -> Div {
     focus_guard(
-        NumberInput::new(state)
+        Input::new(state)
             .flex_none()
-            .min_w(rems(7.5))
+            .min_w(rems(4.))
+            .text_align(gpui_kit::TextAlign::Center)
             .with_size(Size::Medium)
             .disabled(!enabled),
     )
